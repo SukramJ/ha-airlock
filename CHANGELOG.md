@@ -28,6 +28,13 @@ All notable changes to ha-airlock are recorded here. The format follows
 - `internal/hacore`: a client for Core's WebSocket API, and a fourth check
   of `ha-airlock probe` that reports which Home Assistant user the
   Supervisor proxy acts as.
+- `ha-airlock provision` (`internal/provision`): on the first start the App
+  creates its own Home Assistant user through the Supervisor proxy, logs
+  in as it once and keeps the refresh token; the password is not stored.
+  The creation is the first record of the audit log and is announced in
+  the logbook and as a notification. A user of that name that the App did
+  not create is never taken over. The App's container now runs this
+  command. See `docs/own-user.md`.
 
 ### Changed
 
@@ -35,3 +42,5 @@ All notable changes to ha-airlock are recorded here. The format follows
 - New dependency: `github.com/gorilla/websocket` v1.5.3 (BSD-2-Clause, no
   dependencies of its own), for Core's WebSocket API. The first module
   besides the standard library.
+- The App's container runs as root, because the Supervisor creates the
+  App's data directory as root.
