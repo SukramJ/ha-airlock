@@ -1,0 +1,8 @@
+.git
+.github
+.claude
+.idea
+bin
+docs
+notes
+*.md

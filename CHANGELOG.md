@@ -16,3 +16,7 @@ All notable changes to ha-airlock are recorded here. The format follows
 - `CONCEPT.md`: the App provisions its own Home Assistant user on first
   start, the scope of the Never list is stated against that, and the
   attribution of a dedicated user's calls is measured on a running system.
+- `ha-airlock probe` and the packaging as a Home Assistant App
+  (`config.yaml`, `Dockerfile`): run inside the App container, it reports
+  whether Core is reachable through the Supervisor proxy and directly. It
+  only reads.
