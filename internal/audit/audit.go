@@ -146,13 +146,13 @@ func (l *Log) Append(ctx context.Context, entry Entry) (Receipt, error) {
 	hash := hashOf(body)
 	// The line is assembled by hand so that the entry's bytes reach the file
 	// exactly as they were hashed.
-	var out []byte
-	out = append(out, `{"hash":"`...)
-	out = append(out, hash...)
-	out = append(out, `","entry":`...)
-	out = append(out, body...)
-	out = append(out, '}', '\n')
-	if _, err := l.file.Write(out); err != nil {
+	var out bytes.Buffer
+	out.WriteString(`{"hash":"`)
+	out.WriteString(hash)
+	out.WriteString(`","entry":`)
+	out.Write(body)
+	out.WriteString("}\n")
+	if _, err := l.file.Write(out.Bytes()); err != nil {
 		return Receipt{}, fmt.Errorf("write audit line: %w", err)
 	}
 	if err := l.file.Sync(); err != nil {
