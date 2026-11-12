@@ -74,3 +74,5 @@ All notable changes to ha-airlock are recorded here. The format follows
   about 64,000 lines of Go.
 - The App is a service now: it starts with Home Assistant, has a page in
   the sidebar and declares port 8443, unpublished by default.
+- The App's version is 0.1.0-dev, so that an installed App takes over the
+  new configuration (sidebar page, port, options) as an update.
