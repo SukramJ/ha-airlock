@@ -43,6 +43,12 @@ type Home struct {
 	Services      []string
 	LoginFails    bool
 	RefreshStatus int
+	// CoreResults are canned results of Core's own WebSocket commands, by
+	// command type, as JSON.
+	CoreResults map[string]string
+	// CoreCommands are the commands Core's WebSocket received, other than
+	// service calls.
+	CoreCommands []string
 }
 
 // NewHome starts the stand-in; it stops with the test.
@@ -154,6 +160,12 @@ func (h *Home) token(w http.ResponseWriter, r *http.Request) {
 
 func (h *Home) coreCommand(commandType string, raw json.RawMessage) (result, errorCode string) {
 	if commandType != "call_service" {
+		h.Mu.Lock()
+		defer h.Mu.Unlock()
+		h.CoreCommands = append(h.CoreCommands, commandType)
+		if canned, ok := h.CoreResults[commandType]; ok {
+			return canned, ""
+		}
 		return "", "unknown_command"
 	}
 	var cmd struct {

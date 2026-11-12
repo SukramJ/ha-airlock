@@ -1,6 +1,8 @@
 # ha-airlock — Concept
 
-Status: concept, 2026-11-12. Nothing described here is implemented yet.
+Status: concept, 2026-11-12. Implemented so far: the chain of section 2 for
+one read tool, the authorization server, the audit log and the App's own
+user. `CLAUDE.md` states the current extent.
 This document carries the design intent until a `SPECIFICATION.md` and ADRs
 under `docs/adr/` replace it section by section.
 

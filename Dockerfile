@@ -23,4 +23,4 @@ RUN go build -mod=vendor -trimpath \
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /out/ha-airlock /app/ha-airlock
 ENTRYPOINT ["/app/ha-airlock"]
-CMD ["provision"]
+CMD ["serve"]

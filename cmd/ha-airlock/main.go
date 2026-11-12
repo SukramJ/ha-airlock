@@ -4,9 +4,10 @@
 // Command ha-airlock is the MCP server and the composition root of the
 // module. So far it reports its version, measures as "ha-airlock probe" from
 // inside the App container which ways to Home Assistant Core are open, and
-// checks an audit log as "ha-airlock audit verify FILE" and, as "ha-airlock
-// provision", gives itself a Home Assistant user; CONCEPT.md describes what
-// it is meant to become.
+// checks an audit log as "ha-airlock audit verify FILE", gives itself a Home
+// Assistant user as "ha-airlock provision", and as "ha-airlock serve" is the
+// server: the consent page for the Supervisor, and the authorization server
+// and MCP endpoint behind the owner's reverse proxy.
 package main
 
 import (
@@ -14,6 +15,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,6 +26,7 @@ import (
 
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/build"
+	"github.com/SukramJ/ha-airlock/internal/oauth"
 	"github.com/SukramJ/ha-airlock/internal/probe"
 	"github.com/SukramJ/ha-airlock/internal/provision"
 	"github.com/SukramJ/ha-airlock/internal/supervisor"
@@ -38,6 +42,19 @@ type environment struct {
 	// dataDir is the directory the Supervisor keeps for the App across
 	// restarts and updates.
 	dataDir string
+	// ingressAddr is where the Supervisor reaches the consent page,
+	// publicAddr where the owner's reverse proxy reaches everything else.
+	ingressAddr string
+	publicAddr  string
+	// supervisorPeers returns the addresses from which the Supervisor
+	// connects to the ingress listener.
+	supervisorPeers func(ctx context.Context) ([]netip.Addr, error)
+	// clientMetadata fetches the metadata document of an OAuth client from
+	// the internet.
+	clientMetadata oauth.MetadataFetcher
+	// onListening, if set, is told the bound addresses once the listeners
+	// are up.
+	onListening func(map[string]net.Addr)
 }
 
 const (
@@ -53,6 +70,12 @@ func main() {
 		supervisorToken: os.Getenv("SUPERVISOR_TOKEN"),
 		coreHost:        "homeassistant",
 		dataDir:         "/data",
+		ingressAddr:     ":8099",
+		publicAddr:      ":8443",
+		supervisorPeers: func(ctx context.Context) ([]netip.Addr, error) {
+			return lookupSupervisor(ctx, "supervisor")
+		},
+		clientMetadata: oauth.NewFetcher(),
 	}
 	code := run(ctx, os.Args[1:], env, os.Stdout)
 	stop()
@@ -73,6 +96,8 @@ func run(ctx context.Context, args []string, env environment, stdout io.Writer) 
 	switch args[0] {
 	case "probe":
 		return runProbe(ctx, env, logger)
+	case "serve":
+		return runServe(ctx, env, logger)
 	case "provision":
 		return runProvision(ctx, env, logger)
 	case "audit":
