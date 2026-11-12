@@ -55,6 +55,10 @@ All notable changes to ha-airlock are recorded here. The format follows
     hashes, rotating refresh tokens.
   - `internal/mcpserver`: the catalogue over MCP, Streamable HTTP.
   See `docs/connecting-a-client.md`.
+- Four more read-only tools: `repairs_list_issues`, `config_entries_list`,
+  `trace_list`, `logbook_events`.
+- `ha-airlock tools` prints the list of tools from the catalogue;
+  `docs/tools.md` is its output, and a test fails when they differ.
 
 ### Changed
 

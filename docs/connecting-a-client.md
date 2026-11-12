@@ -4,8 +4,8 @@ ha-airlock gives an MCP client access to Home Assistant only after you
 approved that client in Home Assistant. This page describes what you set
 up and what happens.
 
-So far ha-airlock offers one tool, `system_log_list`, which reads the
-errors and warnings Home Assistant Core has collected.
+So far ha-airlock offers tools that read and diagnose only; `tools.md`
+lists them.
 
 ## What you need
 

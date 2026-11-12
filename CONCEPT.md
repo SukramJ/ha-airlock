@@ -348,6 +348,21 @@ Assistant OS / Supervised).
   user list still held one such user. Before that, with a hand-made user
   of the same name present, the App had stopped without creating anything.
 
+- *The server as an App*, same instance, App version 0.1.0-dev: the
+  Supervisor took the new configuration as an update (sidebar page, port
+  8443 unpublished, start with Home Assistant) and kept the data
+  directory; the server reused its credential and logged that the public
+  listener stays closed without `public_url`. Through Ingress with a
+  session the consent page answered 200; without a session, and with
+  forged user headers but no session, the Supervisor answered 401. Whether
+  the App's own port refuses another peer could not be tried from outside:
+  the port is not published.
+- *The five tools' commands* — `system_log/list`, `repairs/list_issues`,
+  `config_entries/get` with a domain, `trace/list` for automations,
+  `logbook/get_events` with a period and with entity ids — were accepted
+  by that Core with the parameters the tools send; `trace/list` with a
+  domain the tool refuses was refused by Core as well.
+
 **Unverified:**
 
 - How the logbook panel shows a dedicated user's entry to the owner. The

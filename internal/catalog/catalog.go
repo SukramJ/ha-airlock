@@ -61,6 +61,10 @@ type Tool struct {
 func All() []Tool {
 	return []Tool{
 		systemLogList(),
+		repairsListIssues(),
+		configEntriesList(),
+		traceList(),
+		logbookEvents(),
 	}
 }
 
