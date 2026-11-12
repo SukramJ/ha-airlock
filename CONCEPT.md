@@ -334,18 +334,23 @@ Assistant OS / Supervised).
   without a credential, answered 401. The App and its repository were
   removed afterwards.
 
+- *Provisioning*, run as an App on the same instance: the Supervisor
+  proxy passed `config/auth/list`, `config/auth/create` and
+  `config/auth_provider/homeassistant/create`; Core accepted the client id
+  `http://homeassistant:8123/` and the login of a `local_only` user from
+  the App network; the App's data directory was writable as root. The user
+  list then held one user `ha-airlock` (admin, local only, one
+  `homeassistant` credential), the logbook an entry carrying that user's id
+  as `context_user_id`, and Home Assistant a notification
+  `ha_airlock_provisioned`. A second start logged `created=false` and the
+  user list still held one such user. Before that, with a hand-made user
+  of the same name present, the App had stopped without creating anything.
+
 **Unverified:**
 
-- A request with the dedicated user's token sent from inside the App
-  container. Reachability was measured from the container and the token
-  from the local network, not both together.
 - How the logbook panel shows a dedicated user's entry to the owner. The
   entry carries the id (measured above) and the frontend code resolves it
   for an admin viewer; the panel itself was not looked at.
-- The provisioning sequence end to end: create the user through the proxy,
-  log in as it from the App container, keep the resulting credential. Each
-  command is measured above; the sequence was not run, and it rests on the
-  direct reachability of the first item.
 - The payload of the notification-action event. The companion app builds
   it, and its source was not read.
 - Which authorization server the remote listener uses. The SDK does not

@@ -62,6 +62,10 @@ lint: ## gofumpt check + golangci-lint + module hygiene
 	$(GOLANGCI_LINT) run --timeout=$(GOLANGCI_TIMEOUT) ./...
 	$(GO) mod tidy -diff
 	$(GO) mod verify
+	@# vendor/ must be exactly what go.mod and go.sum describe.
+	$(GO) mod vendor
+	@out=$$(git diff --name-only -- vendor; git ls-files --others --exclude-standard -- vendor); \
+		test -z "$$out" || { echo "$$out"; echo "vendor/ is out of sync with go.mod (run 'go mod vendor' and add the result)"; exit 1; }
 
 .PHONY: tidy
 tidy: ## tidy go.mod / go.sum
