@@ -20,6 +20,8 @@ All notable changes to ha-airlock are recorded here. The format follows
   (`config.yaml`, `Dockerfile`): run inside the App container, it reports
   whether Core is reachable through the Supervisor proxy and directly. It
   only reads.
+- ADR 0003: ha-airlock acts in Core as a user of its own and connects
+  directly; the probe showed that an App container reaches Core.
 
 ### Changed
 

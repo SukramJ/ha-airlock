@@ -69,3 +69,18 @@ App is the only write, and the owner performs it.
   schema (`supervisor/apps/validate.py:459-469`, `:523-525`; slug pattern
   `supervisor/apps/const.py:58`). The schema itself was not executed on the
   file, so acceptance by the Supervisor is still shown only by installing.
+
+## Result on the owner's instance, 2026-11-12
+
+Home Assistant OS 18.4, Supervisor 2026.11.0, Core 2026.11.1, amd64. The
+repository branch was added to the App store, the App installed, started
+once, and both removed again.
+
+```
+check="supervisor: core info" outcome=ok status=200 detail="port 8123, ssl false"
+check="core through the supervisor proxy" outcome=ok status=200
+check="core directly, without a credential" outcome=ok status=401
+```
+
+The Supervisor reported the App with role `default` and a security rating
+of 7.
