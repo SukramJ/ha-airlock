@@ -8,5 +8,8 @@ Every architectural ADR carries the section the architecture standard
 requires (`CLAUDE.md`): better than the comparison targets, better than the
 state before, and whether the cut is right.
 
-No ADR exists yet. The decisions taken so far are recorded in
+- [0001 — One Go App, no integration inside Core](0001-one-go-app-no-core-integration.md)
+- [0002 — Approval is given in the Ingress UI only](0002-approval-in-the-ingress-ui-only.md)
+
+Decisions without an ADR yet are recorded in
 [`CONCEPT.md`](https://github.com/SukramJ/ha-airlock/blob/main/CONCEPT.md) §3.
