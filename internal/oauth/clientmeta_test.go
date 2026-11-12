@@ -180,3 +180,32 @@ func TestMatchRedirectIsExactExceptForTheLoopbackPort(t *testing.T) {
 		}
 	}
 }
+
+// A redirect must not be followed even when its target would serve a
+// document that is valid for the requested client id.
+func TestFetchDoesNotFollowARedirectToAValidDocument(t *testing.T) {
+	t.Parallel()
+	var srv *httptest.Server
+	srv, f := metadataServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/client.json" {
+			http.Redirect(w, r, "/elsewhere.json", http.StatusFound)
+			return
+		}
+		_, _ = io.WriteString(w, `{"client_id":"`+srv.URL+`/client.json","client_name":"X","redirect_uris":["https://a.example/cb"]}`)
+	})
+
+	if _, err := fetch(t, f, srv.URL+"/client.json"); !errors.Is(err, oauth.ErrInvalidClient) {
+		t.Fatalf("fetch: %v, want invalid_client", err)
+	}
+}
+
+// The port may vary for a loopback redirect only, whatever was registered.
+func TestMatchRedirectKeepsThePortOfAHostThatIsNotLoopback(t *testing.T) {
+	t.Parallel()
+	registered := []string{"http://app.example:3000/cb", "https://app.example:3000/cb"}
+	for _, uri := range []string{"http://app.example:4000/cb", "http://app.example/cb", "https://app.example:4000/cb"} {
+		if oauth.MatchRedirect(registered, uri) {
+			t.Errorf("%q was accepted", uri)
+		}
+	}
+}
