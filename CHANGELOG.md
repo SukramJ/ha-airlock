@@ -16,3 +16,13 @@ All notable changes to ha-airlock are recorded here. The format follows
 - `CONCEPT.md`: the App provisions its own Home Assistant user on first
   start, the scope of the Never list is stated against that, and the
   attribution of a dedicated user's calls is measured on a running system.
+- `ha-airlock probe` and the packaging as a Home Assistant App
+  (`config.yaml`, `Dockerfile`): run inside the App container, it reports
+  whether Core is reachable through the Supervisor proxy and directly. It
+  only reads.
+- ADR 0003: ha-airlock acts in Core as a user of its own and connects
+  directly; the probe showed that an App container reaches Core.
+
+### Changed
+
+- The minimum Go version is 1.27.4, which fixes GO-2026-6859 in `net/http`.

@@ -25,8 +25,10 @@ Assistant App: one container beside Core.
 - **Language**: Go 1.27+ · module `github.com/SukramJ/ha-airlock`
 - **License**: Apache-2.0; contributions come under [`CLA.md`](./CLA.md).
 - **Deployment**: one static binary (`CGO_ENABLED=0`). No CGo.
-- **State of the code**: `cmd/ha-airlock` prints its version. Nothing of the
-  concept is implemented; phase 0 of `CONCEPT.md` §10 comes first.
+- **State of the code**: `cmd/ha-airlock` prints its version and, as
+  `ha-airlock probe`, measures from inside the App container which ways to
+  Core are open (`notes/phase1-probe.md`). Nothing of the concept's chain is
+  implemented; phase 0 of `CONCEPT.md` §10 is closed by that probe's result.
 
 Every tool call passes one chain, in this order:
 
@@ -178,9 +180,11 @@ record the answer here.
 ```
 ha-airlock/
 ├── CONCEPT.md  CLAUDE.md  CHANGELOG.md  Makefile
+├── config.yaml  Dockerfile  repository.yaml  — the Home Assistant App: Supervisor config, image, App repository
 ├── cmd/ha-airlock/      — the server (composition root)
 ├── internal/
 │   ├── build/           — version
+│   ├── probe/           — reachability probe (Supervisor proxy, Core directly)
 │   └── repoguard/       — repository-wide guards (licence header)
 ├── docs/                — PUBLISHED documentation only
 └── notes/               — engineering working docs, NEVER published

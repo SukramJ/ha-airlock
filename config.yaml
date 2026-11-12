@@ -1,0 +1,19 @@
+# Home Assistant App configuration, read by the Supervisor.
+#
+# This is the reachability probe: the container runs "ha-airlock probe"
+# once, writes what it measured to the App log and exits. It only reads.
+name: ha-airlock
+version: "0.0.0-dev"
+slug: ha_airlock
+description: MCP gateway for Home Assistant. This build only probes which ways to Core are open.
+url: https://github.com/SukramJ/ha-airlock
+arch:
+  - aarch64
+  - amd64
+startup: once
+boot: manual
+# hassio_api lets the probe ask the Supervisor where Core listens; the
+# default role covers that. homeassistant_api opens the Supervisor's proxy
+# to Core, which is one of the two ways the probe measures.
+hassio_api: true
+homeassistant_api: true

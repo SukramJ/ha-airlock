@@ -41,7 +41,7 @@ Owner decisions of 2026-11-12:
 | Diagnosis | Analysing problems with Home Assistant comprehensively is a first-class goal |
 | Approval | Out-of-band, inside Home Assistant — never through the model's channel. Given in the Ingress UI only; a push notification is a notice ([ADR 0002](docs/adr/0002-approval-in-the-ingress-ui-only.md)) |
 | Cut | One Go App, no integration inside Core ([ADR 0001](docs/adr/0001-one-go-app-no-core-integration.md)) |
-| Core identity | A dedicated Home Assistant user with its own token, connected to Core directly, so that actions are attributable. The Supervisor proxy is not used for Core calls. Subject to the reachability check in section 9; an ADR follows it |
+| Core identity | A dedicated Home Assistant user with its own token, connected to Core directly, so that actions are attributable. The Supervisor proxy is not used for Core calls ([ADR 0003](docs/adr/0003-a-dedicated-core-user-reached-directly.md)) |
 | Provisioning | The App creates that user and obtains its credential itself on first start; the owner neither creates a user nor copies a token. The step is announced in Home Assistant and is the first record of the audit log |
 | Name | `ha-airlock`, without a `go-` prefix: an end-user product installed as an App, like `openccu-loom` |
 
@@ -298,6 +298,8 @@ Assistant OS / Supervised).
   MCP SDK" (section 7) is this set, not one module.
 - Licence: Apache-2.0 for new contributions, MIT for existing code
   (`README.md:170`).
+- It builds without CGo: `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build`
+  over `mcp`, `auth`, `oauthex` and `jsonrpc` ended with exit status 0.
 
 - *Provisioning a user without code inside Core.* An admin connection can
   create a user (`config/auth/create`, `config/auth.py:84-102`) and give it
@@ -321,12 +323,18 @@ Assistant OS / Supervised).
   entry read in the same window, 171 and 199 of them, carried none — the id
   comes from the call, not from a default.
 
+- *The reachability probe*, run as an App on Home Assistant OS 18.4 with
+  Supervisor 2026.11.0 (amd64): the Supervisor accepted `config.yaml` and
+  built the image; from inside the container `/core/info` answered 200 with
+  port and scheme, Core through the proxy answered 200, and Core directly,
+  without a credential, answered 401. The App and its repository were
+  removed afterwards.
+
 **Unverified:**
 
-- Whether an App can reach Core directly with a token of its own, as a
-  dedicated user instead of through the proxy. The Supervisor source shows
-  nothing that forbids it. The token works from the local network
-  (measured above); from inside an App container it was not tried.
+- A request with the dedicated user's token sent from inside the App
+  container. Reachability was measured from the container and the token
+  from the local network, not both together.
 - How the logbook panel shows a dedicated user's entry to the owner. The
   entry carries the id (measured above) and the frontend code resolves it
   for an admin viewer; the panel itself was not looked at.
@@ -336,8 +344,6 @@ Assistant OS / Supervised).
   direct reachability of the first item.
 - The payload of the notification-action event. The companion app builds
   it, and its source was not read.
-- That the Go MCP SDK builds with `CGO_ENABLED=0`. A grep for `import "C"`
-  found nothing, without a control that it would have.
 - Which authorization server the remote listener uses. The SDK does not
   provide one, and the specification revision in force was read only as a
   draft page.
@@ -345,8 +351,9 @@ Assistant OS / Supervised).
 ## 10. Phases
 
 0. **Verification spike.** The source reading is done and decided the cut
-   (ADR 0001, ADR 0002). What remains is the *Unverified* list of section 9,
-   settled against the owner's instance.
+   (ADR 0001, ADR 0002); the probe on the owner's instance decided the Core
+   identity (ADR 0003). What remains of section 9's *Unverified* list is
+   settled by the code that first needs it.
 1. **R0** with audit, redaction and the Ingress UI — the diagnostic benefit
    without any write risk.
 2. **R1** with the approval mechanism.
