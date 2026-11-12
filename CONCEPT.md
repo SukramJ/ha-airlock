@@ -42,6 +42,7 @@ Owner decisions of 2026-11-12:
 | Approval | Out-of-band, inside Home Assistant — never through the model's channel. Given in the Ingress UI only; a push notification is a notice ([ADR 0002](docs/adr/0002-approval-in-the-ingress-ui-only.md)) |
 | Cut | One Go App, no integration inside Core ([ADR 0001](docs/adr/0001-one-go-app-no-core-integration.md)) |
 | Core identity | A dedicated Home Assistant user with its own token, connected to Core directly, so that actions are attributable. The Supervisor proxy is not used for Core calls. Subject to the reachability check in section 9; an ADR follows it |
+| Provisioning | The App creates that user and obtains its credential itself on first start; the owner neither creates a user nor copies a token. The step is announced in Home Assistant and is the first record of the audit log |
 | Name | `ha-airlock`, without a `go-` prefix: an end-user product installed as an App, like `openccu-loom` |
 
 ```
@@ -74,6 +75,12 @@ MCP client
 
 The two profile columns are starting values. Everything can be narrowed in
 the policy file; nothing in the **Never** row can be enabled by policy.
+
+The **Never** row governs what a client can reach: no tool creates, changes
+or deletes a user or a token. The App provisioning its own user on first
+start (section 3) is not a tool and takes no arguments from a client; it
+creates exactly one user, its own, and nothing in the catalogue can invoke
+it.
 
 Diagnosis is the reason R0 is broad. It is also where the most sensitive data
 leaves the house (section 6, redaction).
@@ -292,13 +299,41 @@ Assistant OS / Supervised).
 - Licence: Apache-2.0 for new contributions, MIT for existing code
   (`README.md:170`).
 
+- *Provisioning a user without code inside Core.* An admin connection can
+  create a user (`config/auth/create`, `config/auth.py:84-102`) and give it
+  a username and password (`config/auth_provider/homeassistant/create`,
+  `config/auth_provider_homeassistant.py:31-39`). A long-lived token is
+  created for the connection's own user only
+  (`auth/__init__.py:637-656`), so through the proxy it would belong to
+  the Supervisor user, not to the new one. The new user's credential
+  therefore has to come from a login as that user (`/auth/login_flow`,
+  `auth/login_flow.py:339`). The Supervisor proxy refuses only WebSocket
+  types starting with `supervisor/` or `hassio/` (Supervisor
+  `api/proxy.py:50`), so it lets the two `config/…` commands through.
+
+**Measured in phase 0 — the owner's instance**, Core 2026.11.1,
+2026-11-12, over the REST API from the local network:
+
+- A `logbook.log` call made with a long-lived token of a dedicated admin
+  user (no person entity) produced a logbook entry whose `context_user_id`
+  is that user's id, as `auth/current_user` reports it for the same token.
+  The same call with the owner's token carried the owner's id. Every other
+  entry read in the same window, 171 and 199 of them, carried none — the id
+  comes from the call, not from a default.
+
 **Unverified:**
 
 - Whether an App can reach Core directly with a token of its own, as a
   dedicated user instead of through the proxy. The Supervisor source shows
-  nothing that forbids it; it was not tried.
-- How the logbook renders a dedicated user's actions on a running system.
-  The code path is measured above; no instance was looked at.
+  nothing that forbids it. The token works from the local network
+  (measured above); from inside an App container it was not tried.
+- How the logbook panel shows a dedicated user's entry to the owner. The
+  entry carries the id (measured above) and the frontend code resolves it
+  for an admin viewer; the panel itself was not looked at.
+- The provisioning sequence end to end: create the user through the proxy,
+  log in as it from the App container, keep the resulting credential. Each
+  command is measured above; the sequence was not run, and it rests on the
+  direct reachability of the first item.
 - The payload of the notification-action event. The companion app builds
   it, and its source was not read.
 - That the Go MCP SDK builds with `CGO_ENABLED=0`. A grep for `import "C"`
