@@ -7,7 +7,6 @@ package hacoretest
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -55,16 +54,29 @@ func serve(ws *websocket.Conn, token string, results map[string]string) {
 		if err := ws.ReadJSON(&cmd); err != nil {
 			return
 		}
-		id, err := json.Marshal(cmd.ID)
-		if err != nil {
-			return
-		}
-		reply := fmt.Sprintf(`{"id":%s,"type":"result","success":false,"error":{"code":"unknown_command","message":"Unknown command."}}`, id)
+		reply := answer{ID: cmd.ID, Type: "result"}
 		if result, ok := results[cmd.Type]; ok {
-			reply = fmt.Sprintf(`{"id":%s,"type":"result","success":true,"result":%s}`, id, result)
+			reply.Success = true
+			reply.Result = json.RawMessage(result)
+		} else {
+			reply.Error = &answerError{Code: "unknown_command", Message: "Unknown command."}
 		}
-		if err := ws.WriteMessage(websocket.TextMessage, []byte(reply)); err != nil {
+		if err := ws.WriteJSON(reply); err != nil {
 			return
 		}
 	}
+}
+
+// answer is Core's reply to a command.
+type answer struct {
+	ID      uint64          `json:"id"`
+	Type    string          `json:"type"`
+	Success bool            `json:"success"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *answerError    `json:"error,omitempty"`
+}
+
+type answerError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
