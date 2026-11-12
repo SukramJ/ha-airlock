@@ -22,6 +22,9 @@ All notable changes to ha-airlock are recorded here. The format follows
   only reads.
 - ADR 0003: ha-airlock acts in Core as a user of its own and connects
   directly; the probe showed that an App container reaches Core.
+- The audit log (`internal/audit`): append-only JSON lines chained by
+  SHA-256, and `ha-airlock audit verify FILE` to check a log. Nothing
+  records into it yet. See `docs/audit-log.md`.
 
 ### Changed
 
