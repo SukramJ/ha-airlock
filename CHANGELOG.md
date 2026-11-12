@@ -45,3 +45,6 @@ All notable changes to ha-airlock are recorded here. The format follows
   besides the standard library.
 - The App's container runs as root, because the Supervisor creates the
   App's data directory as root.
+- Dependencies are vendored: `vendor/` holds the third-party code the
+  build uses, `make lint` fails when it differs from `go.mod`, and the
+  image build fetches nothing.

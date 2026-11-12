@@ -193,7 +193,8 @@ ha-airlock/
 │   ├── supervisor/      — what the Supervisor tells the App (Core's address)
 │   └── repoguard/       — repository-wide guards (licence header)
 ├── docs/                — PUBLISHED documentation only
-└── notes/               — engineering working docs, NEVER published
+├── notes/               — engineering working docs, NEVER published
+└── vendor/              — third-party code, written by `go mod vendor` only, never edited
 ```
 
 **`docs/` vs `notes/` is a hard boundary.** `docs/` is for whoever installs

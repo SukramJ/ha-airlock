@@ -27,3 +27,6 @@
 *.tar    binary
 *.tgz    binary
 *.bin    binary
+
+# Third-party code copied in by 'go mod vendor': not this project's source.
+vendor/** linguist-vendored
