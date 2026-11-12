@@ -50,3 +50,10 @@ It does not use the proxy and creates nothing.
 - No MCP tool can create, change or delete a user or a token. Creating
   this one user is part of the App's start and takes no input from a
   client.
+
+## Where this was seen working
+
+On Home Assistant OS 18.4 with Supervisor 2026.11.0 and Core 2026.11.1:
+the first start created the user, the logbook entry and the notification;
+the second start reused the credential; and with a user of the same name
+already present the App stopped without creating anything.
