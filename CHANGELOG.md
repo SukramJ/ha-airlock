@@ -35,6 +35,10 @@ All notable changes to ha-airlock are recorded here. The format follows
   the logbook and as a notification. A user of that name that the App did
   not create is never taken over. The App's container now runs this
   command. See `docs/own-user.md`.
+- ADR 0004: the OAuth 2.1 authorization server is part of the App, clients
+  are approved in the Ingress UI, and a profile is assigned per client.
+  `CONCEPT.md` §3, §4, §5 and §10 follow. Not implemented yet.
+- `CONCEPT.md` §9: provisioning measured on a running Home Assistant.
 
 ### Changed
 
@@ -44,3 +48,6 @@ All notable changes to ha-airlock are recorded here. The format follows
   besides the standard library.
 - The App's container runs as root, because the Supervisor creates the
   App's data directory as root.
+- Dependencies are vendored: `vendor/` holds the third-party code the
+  build uses, `make lint` fails when it differs from `go.mod`, and the
+  image build fetches nothing.
