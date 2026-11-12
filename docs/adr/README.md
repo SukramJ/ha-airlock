@@ -11,6 +11,7 @@ state before, and whether the cut is right.
 - [0001 — One Go App, no integration inside Core](0001-one-go-app-no-core-integration.md)
 - [0002 — Approval is given in the Ingress UI only](0002-approval-in-the-ingress-ui-only.md)
 - [0003 — A dedicated Core user, reached directly](0003-a-dedicated-core-user-reached-directly.md)
+- [0004 — The authorization server lives in the App; consent is given in the Ingress UI](0004-the-authorization-server-lives-in-the-app.md) — proposed
 
 Decisions without an ADR yet are recorded in
 [`CONCEPT.md`](https://github.com/SukramJ/ha-airlock/blob/main/CONCEPT.md) §3.
