@@ -10,8 +10,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SukramJ/ha-airlock/internal/audit"
 )
 
 func TestRunWithoutArgumentsPrintsTheVersion(t *testing.T) {
@@ -92,5 +96,70 @@ func TestProbeCommandRunsEveryCheckAndKeepsTheTokenOutOfTheLog(t *testing.T) {
 	}
 	if strings.Contains(out.String(), token) {
 		t.Fatal("the log contains the Supervisor token")
+	}
+}
+
+func writeAuditLog(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	log, err := audit.Open(path)
+	if err != nil {
+		t.Fatalf("open audit log: %v", err)
+	}
+	for range 2 {
+		if _, err := log.Append(context.Background(), audit.Entry{Event: "tool_call", Decision: "allow"}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	if err := log.Close(); err != nil {
+		t.Fatalf("close audit log: %v", err)
+	}
+	return path
+}
+
+func TestAuditVerifyCommandAcceptsAnUntouchedLog(t *testing.T) {
+	t.Parallel()
+	path := writeAuditLog(t)
+	var out bytes.Buffer
+
+	code := run(context.Background(), []string{"audit", "verify", path}, environment{}, &out)
+
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want %d; output:\n%s", code, exitOK, out.String())
+	}
+	if !strings.HasPrefix(out.String(), "ok: 2 records, head ") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestAuditVerifyCommandFailsOnAChangedLog(t *testing.T) {
+	t.Parallel()
+	path := writeAuditLog(t)
+	data, err := os.ReadFile(path) //nolint:gosec // test file below t.TempDir
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	changed := strings.Replace(string(data), `"decision":"allow"`, `"decision":"deny"`, 1)
+	if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+	var out bytes.Buffer
+
+	code := run(context.Background(), []string{"audit", "verify", path}, environment{}, &out)
+
+	if code != exitFailed {
+		t.Fatalf("exit code = %d, want %d; output:\n%s", code, exitFailed, out.String())
+	}
+	if !strings.Contains(out.String(), "line 1: hash does not match the entry") {
+		t.Fatalf("output does not name the break:\n%s", out.String())
+	}
+}
+
+func TestAuditCommandRejectsAWrongInvocation(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+
+	if code := run(context.Background(), []string{"audit", "verify"}, environment{}, &out); code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
 	}
 }

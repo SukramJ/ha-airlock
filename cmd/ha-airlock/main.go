@@ -2,9 +2,10 @@
 // Copyright (C) 2026 SukramJ.
 
 // Command ha-airlock is the MCP server and the composition root of the
-// module. So far it reports its version and, as "ha-airlock probe", measures
-// from inside the App container which ways to Home Assistant Core are open;
-// CONCEPT.md describes what it is meant to become.
+// module. So far it reports its version, measures as "ha-airlock probe" from
+// inside the App container which ways to Home Assistant Core are open, and
+// checks an audit log as "ha-airlock audit verify FILE"; CONCEPT.md describes
+// what it is meant to become.
 package main
 
 import (
@@ -17,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/build"
 	"github.com/SukramJ/ha-airlock/internal/probe"
 )
@@ -62,6 +64,8 @@ func run(ctx context.Context, args []string, env environment, stdout io.Writer) 
 	switch args[0] {
 	case "probe":
 		return runProbe(ctx, env, logger)
+	case "audit":
+		return runAudit(ctx, args[1:], stdout, logger)
 	default:
 		logger.ErrorContext(ctx, "unknown command", slog.String("command", args[0]))
 		return exitUsage
@@ -86,5 +90,23 @@ func runProbe(ctx context.Context, env environment, logger *slog.Logger) int {
 		return exitFailed
 	}
 	logger.InfoContext(ctx, "probe finished: every way is open")
+	return exitOK
+}
+
+// runAudit handles "audit verify FILE": it checks the hash chain of an audit
+// log and prints how many records it holds and the hash of the last one.
+func runAudit(ctx context.Context, args []string, stdout io.Writer, logger *slog.Logger) int {
+	if len(args) != 2 || args[0] != "verify" {
+		logger.ErrorContext(ctx, "usage: ha-airlock audit verify FILE")
+		return exitUsage
+	}
+	summary, err := audit.VerifyFile(args[1])
+	if err != nil {
+		logger.ErrorContext(ctx, "audit log does not verify", slog.Any("error", err))
+		return exitFailed
+	}
+	if _, err := fmt.Fprintf(stdout, "ok: %d records, head %s\n", summary.Records, summary.Head); err != nil {
+		return exitFailed
+	}
 	return exitOK
 }
