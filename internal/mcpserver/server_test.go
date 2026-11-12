@@ -82,8 +82,12 @@ func newFixture(t *testing.T) fixture {
 	core := &fakeCore{}
 	g := gate.New(policy.Default(), log, core, catalog.All(), 5*time.Second)
 	server := mcpserver.New(g, catalog.All(), "test")
-	httpServer := httptest.NewServer(mcpserver.Handler(server, verify, metadataURL))
+	// The handler needs the host it is served under, which exists only once
+	// the test server listens.
+	var handler http.Handler
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	t.Cleanup(httpServer.Close)
+	handler = mcpserver.Handler(server, verify, metadataURL, strings.TrimPrefix(httpServer.URL, "http://"))
 	return fixture{url: httpServer.URL, core: core, auditPath: auditPath}
 }
 
@@ -273,5 +277,32 @@ func TestCallOfAnUndeclaredToolIsRefusedAndRecorded(t *testing.T) {
 	audited := f.auditText(t)
 	if !strings.Contains(audited, `"tool":"call_any_service"`) || !strings.Contains(audited, `"decision":"unknown_tool"`) {
 		t.Fatalf("audit log:\n%s", audited)
+	}
+}
+
+func TestRequestUnderAnotherHostNameIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, f.url,
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system_log_list"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "attacker.example"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+localToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("status %d, want 421", resp.StatusCode)
+	}
+	if f.core.count() != 0 {
+		t.Fatal("Home Assistant was reached under a foreign host name")
 	}
 }

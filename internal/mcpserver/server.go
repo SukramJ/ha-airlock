@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -95,14 +96,31 @@ func failure(message string) *mcp.CallToolResult {
 }
 
 // Handler serves the MCP server over Streamable HTTP. Every request must
-// carry an access token the verifier accepts; without one the answer is 401
-// and points to resourceMetadataURL, as RFC 9728 describes.
-func Handler(server *mcp.Server, verifier auth.TokenVerifier, resourceMetadataURL string) http.Handler {
+// name publicHost in its Host header and carry an access token the verifier
+// accepts; without a token the answer is 401 and points to
+// resourceMetadataURL, as RFC 9728 describes.
+func Handler(server *mcp.Server, verifier auth.TokenVerifier, resourceMetadataURL, publicHost string) http.Handler {
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
+		&mcp.StreamableHTTPOptions{
+			Stateless:    true,
+			JSONResponse: true,
+			// The SDK's own protection refuses any Host that is not a
+			// loopback name on a loopback connection. Here the expected Host
+			// is known exactly, and is checked below for every connection.
+			DisableLocalhostProtection: true,
+		},
 	)
-	return auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{
+	protected := auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{
 		ResourceMetadataURL: resourceMetadataURL,
 	})(streamable)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A browser led to this port under another name — DNS rebinding —
+		// is turned away before anything else is looked at.
+		if !strings.EqualFold(r.Host, publicHost) {
+			http.Error(w, "This server answers under its configured public address only.", http.StatusMisdirectedRequest)
+			return
+		}
+		protected.ServeHTTP(w, r)
+	})
 }

@@ -39,6 +39,22 @@ All notable changes to ha-airlock are recorded here. The format follows
   are approved in the Ingress UI, and a profile is assigned per client.
   `CONCEPT.md` §3, §4, §5 and §10 follow. Not implemented yet.
 - `CONCEPT.md` §9: provisioning measured on a running Home Assistant.
+- The MCP server (`ha-airlock serve`), which the App's container now runs:
+  - `internal/catalog`: the static tool catalogue, with a first tool,
+    `system_log_list`.
+  - `internal/policy`: default-deny per profile and tier, from an optional
+    `policy.json`.
+  - `internal/redact`: credentials and coordinates are removed from every
+    result and from what the audit log keeps.
+  - `internal/gate`: the one enforcement point — identity, policy, tool,
+    redaction, audit record. A call that cannot be recorded returns
+    nothing.
+  - `internal/oauth`: the authorization server of ADR 0004 — clients
+    identified by a metadata document, approved by an administrator in the
+    Ingress page after comparing a code, PKCE, opaque tokens stored as
+    hashes, rotating refresh tokens.
+  - `internal/mcpserver`: the catalogue over MCP, Streamable HTTP.
+  See `docs/connecting-a-client.md`.
 
 ### Changed
 
@@ -51,3 +67,10 @@ All notable changes to ha-airlock are recorded here. The format follows
 - Dependencies are vendored: `vendor/` holds the third-party code the
   build uses, `make lint` fails when it differs from `go.mod`, and the
   image build fetches nothing.
+- New dependency: `github.com/modelcontextprotocol/go-sdk` v1.8.0 with
+  seven transitive modules (`google/jsonschema-go`, `segmentio/asm`,
+  `segmentio/encoding`, `yosida95/uritemplate`, `golang.org/x/oauth2`,
+  `x/sync`, `x/sys`, `x/time`), all MIT or BSD-3-Clause. `vendor/` grows to
+  about 64,000 lines of Go.
+- The App is a service now: it starts with Home Assistant, has a page in
+  the sidebar and declares port 8443, unpublished by default.

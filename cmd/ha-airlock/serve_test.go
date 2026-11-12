@@ -1,0 +1,433 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 SukramJ.
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/SukramJ/ha-airlock/internal/audit"
+	"github.com/SukramJ/ha-airlock/internal/oauth"
+	"github.com/SukramJ/ha-airlock/internal/provision/provisiontest"
+)
+
+const (
+	publicURL       = "https://airlock.test"
+	testClientID    = "https://client.test/metadata.json"
+	testRedirect    = "http://127.0.0.1:41000/callback"
+	testVerifier    = "a-code-verifier-that-is-long-enough-for-pkce-0123456789"
+	credentialInLog = "hunter2pass"
+)
+
+// oneClient is the metadata source of the test: it knows one client and
+// never touches the network.
+type oneClient struct{}
+
+func (oneClient) Fetch(_ context.Context, id string) (oauth.ClientMetadata, error) {
+	if id != testClientID {
+		return oauth.ClientMetadata{}, oauth.ErrInvalidClient
+	}
+	return oauth.ClientMetadata{ClientID: id, ClientName: "Wiring Test Client", RedirectURIs: []string{testRedirect}}, nil
+}
+
+// safeBuffer is a log sink the server and the test may use at once.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// running is a server started through run, the way main starts it.
+type running struct {
+	home    *provisiontest.Home
+	dataDir string
+	ingress string
+	public  string // empty when the public listener is closed
+	log     *safeBuffer
+}
+
+// startServer runs "ha-airlock serve" against a stand-in Home Assistant
+// and returns once its listeners are up.
+func startServer(t *testing.T, optionsJSON string, peers ...netip.Addr) *running {
+	t.Helper()
+	home := provisiontest.NewHome(t)
+	home.CoreResults = map[string]string{"system_log/list": `[{"name":"homeassistant.components.mqtt","level":"ERROR",
+		"message":["cannot connect to mqtt://user:` + credentialInLog + `@broker:1883"],"count":2}]`}
+	r := &running{home: home, dataDir: t.TempDir(), log: &safeBuffer{}}
+	if optionsJSON != "" {
+		if err := os.WriteFile(filepath.Join(r.dataDir, "options.json"), []byte(optionsJSON), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(peers) == 0 {
+		peers = []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+	}
+	listening := make(chan map[string]net.Addr, 1)
+	env := environment{
+		supervisorURL:   home.Supervisor.URL,
+		supervisorToken: provisiontest.SupervisorToken,
+		coreHost:        "127.0.0.1",
+		dataDir:         r.dataDir,
+		ingressAddr:     "127.0.0.1:0",
+		publicAddr:      "127.0.0.1:0",
+		supervisorPeers: func(context.Context) ([]netip.Addr, error) { return peers, nil },
+		clientMetadata:  oneClient{},
+		onListening:     func(addrs map[string]net.Addr) { listening <- addrs },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, []string{"serve"}, env, r.log) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("the server did not stop")
+		}
+	})
+	select {
+	case addrs := <-listening:
+		r.ingress = "http://" + addrs["ingress"].String()
+		if a, ok := addrs["public"]; ok {
+			r.public = a.String()
+		}
+	case code := <-done:
+		t.Fatalf("the server exited with %d before listening; log:\n%s", code, r.log.String())
+	case <-time.After(15 * time.Second):
+		t.Fatalf("the server did not start; log:\n%s", r.log.String())
+	}
+	return r
+}
+
+// throughProxy sends requests for the public URL to the server's public
+// listener, as the owner's reverse proxy does: over plain HTTP, with the
+// public host in the Host header.
+type throughProxy struct {
+	addr   string
+	bearer string
+}
+
+func (p throughProxy) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Host = req.URL.Host
+	req.URL.Scheme, req.URL.Host = "http", p.addr
+	if p.bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+p.bearer)
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func (r *running) browser() *http.Client {
+	return &http.Client{
+		Transport:     throughProxy{addr: r.public},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+type page struct {
+	status   int
+	location string
+	body     string
+	header   http.Header
+}
+
+func fetchPage(t *testing.T, client *http.Client, req *http.Request) page {
+	t.Helper()
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", req.Method, req.URL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page{status: resp.StatusCode, location: resp.Header.Get("Location"), body: string(body), header: resp.Header}
+}
+
+func getPage(t *testing.T, client *http.Client, target string) page {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fetchPage(t, client, req)
+}
+
+// asAdmin sends a request to the ingress listener with the headers the
+// Supervisor sets for an administrator.
+func (r *running) asAdmin(t *testing.T, method, path string, form url.Values) page {
+	t.Helper()
+	var body io.Reader = http.NoBody
+	if form != nil {
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, r.ingress+path, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	req.Header.Set("X-Remote-User-Id", "admin-user-id")
+	req.Header.Set("X-Remote-User-Groups", "system-admin")
+	return fetchPage(t, http.DefaultClient, req)
+}
+
+var (
+	userCodeRE  = regexp.MustCompile(`[A-Z2-9]{4}-[A-Z2-9]{4}`)
+	formTokenRE = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
+)
+
+// authorize plays a client and its owner through the whole OAuth flow and
+// returns an access token.
+func (r *running) authorize(t *testing.T, profile string) string {
+	t.Helper()
+	browser := r.browser()
+	sum := sha256.Sum256([]byte(testVerifier))
+	q := url.Values{
+		"response_type": {"code"}, "client_id": {testClientID}, "redirect_uri": {testRedirect}, "state": {"s1"},
+		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"},
+		"resource": {publicURL + oauth.PathMCP},
+	}
+	started := getPage(t, browser, publicURL+oauth.PathAuthorize+"?"+q.Encode())
+	if started.status != http.StatusSeeOther {
+		t.Fatalf("authorize: status %d\n%s", started.status, started.body)
+	}
+	waiting := getPage(t, browser, started.location)
+	userCode := userCodeRE.FindString(waiting.body)
+	if waiting.status != http.StatusOK || userCode == "" {
+		t.Fatalf("waiting page: status %d\n%s", waiting.status, waiting.body)
+	}
+
+	consent := r.asAdmin(t, http.MethodGet, "/", nil)
+	token := formTokenRE.FindStringSubmatch(consent.body)
+	if token == nil || !strings.Contains(consent.body, userCode) {
+		t.Fatalf("consent page:\n%s", consent.body)
+	}
+	decided := r.asAdmin(t, http.MethodPost, "/decide", url.Values{
+		"csrf": {token[1]}, "code": {userCode}, "action": {"approve"}, "profile": {profile},
+	})
+	if decided.status != http.StatusOK {
+		t.Fatalf("decide: status %d\n%s", decided.status, decided.body)
+	}
+
+	finished := getPage(t, browser, started.location)
+	target, err := url.Parse(finished.location)
+	if err != nil || finished.status != http.StatusFound || target.Query().Get("code") == "" {
+		t.Fatalf("after approval: status %d, location %q", finished.status, finished.location)
+	}
+	form := url.Values{
+		"grant_type": {"authorization_code"}, "code": {target.Query().Get("code")}, "client_id": {testClientID},
+		"code_verifier": {testVerifier}, "resource": {publicURL + oauth.PathMCP},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, publicURL+oauth.PathToken, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	issued := fetchPage(t, browser, req)
+	var tokens struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal([]byte(issued.body), &tokens); err != nil || tokens.AccessToken == "" {
+		t.Fatalf("token response: %d %s", issued.status, issued.body)
+	}
+	return tokens.AccessToken
+}
+
+func (r *running) callTool(t *testing.T, accessToken, name string) (text string, isError bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client := mcp.NewClient(&mcp.Implementation{Name: "wiring-test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:             publicURL + oauth.PathMCP,
+		HTTPClient:           &http.Client{Transport: throughProxy{addr: r.public, bearer: accessToken}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name})
+	if err != nil {
+		t.Fatalf("call %s: %v", name, err)
+	}
+	content, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("content is %T", result.Content[0])
+	}
+	return content.Text, result.IsError
+}
+
+func (r *running) auditText(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(r.dataDir, "audit.jsonl")
+	if _, err := audit.VerifyFile(path); err != nil {
+		t.Fatalf("audit log does not verify: %v", err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // test file below t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// The server as main builds it: a client that an administrator approved for
+// the local profile calls a tool, and the call passes policy, redaction and
+// the audit log.
+func TestServedToolCallPassesAuthorizationPolicyRedactionAndAudit(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`/"}`)
+	accessToken := r.authorize(t, "local")
+
+	text, isError := r.callTool(t, accessToken, "system_log_list")
+
+	if isError || !strings.Contains(text, "homeassistant.components.mqtt") {
+		t.Fatalf("tool result: isError = %t, %s", isError, text)
+	}
+	if strings.Contains(text, credentialInLog) {
+		t.Fatalf("a credential reached the client: %s", text)
+	}
+	audited := r.auditText(t)
+	for _, want := range []string{
+		`"event":"provisioning"`, `"event":"client_approved"`, `"approver":"admin-user-id"`,
+		`"event":"tool_call"`, `"tool":"system_log_list"`, `"client":"` + testClientID + `"`, `"decision":"allow"`,
+	} {
+		if !strings.Contains(audited, want) {
+			t.Errorf("audit log lacks %s:\n%s", want, audited)
+		}
+	}
+	if strings.Contains(audited, credentialInLog) || strings.Contains(audited, accessToken) {
+		t.Fatal("the audit log holds a credential")
+	}
+	if strings.Contains(r.log.String(), accessToken) || strings.Contains(r.log.String(), provisiontest.RefreshToken) {
+		t.Fatal("the server log holds a token")
+	}
+}
+
+// The same server, a client approved for the remote profile: the default
+// policy denies it, the tool does not run, and the refusal is recorded.
+func TestServedToolCallIsRefusedForAProfileThePolicyDenies(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`"}`)
+	accessToken := r.authorize(t, "remote")
+
+	text, isError := r.callTool(t, accessToken, "system_log_list")
+
+	if !isError || !strings.Contains(text, "policy") {
+		t.Fatalf("tool result: isError = %t, %s", isError, text)
+	}
+	r.home.Mu.Lock()
+	reached := len(r.home.CoreCommands)
+	r.home.Mu.Unlock()
+	if reached != 0 {
+		t.Fatal("Home Assistant was reached although the policy denies the call")
+	}
+	if audited := r.auditText(t); !strings.Contains(audited, `"decision":"deny"`) {
+		t.Fatalf("the refusal is not recorded:\n%s", audited)
+	}
+}
+
+func TestPublicListenerAnswersUnderThePublicHostOnlyAndRequiresAToken(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`"}`)
+
+	direct := getPage(t, http.DefaultClient, "http://"+r.public+oauth.PathServerMetadata)
+	if direct.status != http.StatusMisdirectedRequest {
+		t.Fatalf("request under the listener's own address: status %d, want 421", direct.status)
+	}
+	named := getPage(t, r.browser(), publicURL+oauth.PathServerMetadata)
+	if named.status != http.StatusOK || !strings.Contains(named.body, `"issuer":"`+publicURL+`"`) {
+		t.Fatalf("request under the public host: %d %s", named.status, named.body)
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, publicURL+oauth.PathMCP,
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	unauthenticated := fetchPage(t, r.browser(), req)
+	if unauthenticated.status != http.StatusUnauthorized ||
+		!strings.Contains(unauthenticated.header.Get("WWW-Authenticate"), publicURL+oauth.PathResourceMetadata) {
+		t.Fatalf("MCP without a token: %d, challenge %q", unauthenticated.status, unauthenticated.header.Get("WWW-Authenticate"))
+	}
+	invented, err := http.NewRequestWithContext(context.Background(), http.MethodPost, publicURL+oauth.PathMCP,
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	invented.Header.Set("Content-Type", "application/json")
+	invented.Header.Set("Accept", "application/json, text/event-stream")
+	invented.Header.Set("Authorization", "Bearer a-token-nobody-issued")
+	if got := fetchPage(t, r.browser(), invented); got.status != http.StatusUnauthorized {
+		t.Fatalf("MCP with an invented token: status %d, want 401", got.status)
+	}
+}
+
+func TestConsentPageIsServedToTheSupervisorOnly(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`"}`, netip.MustParseAddr("172.30.32.2"))
+
+	// The test connects from 127.0.0.1, which is not the Supervisor here.
+	got := r.asAdmin(t, http.MethodGet, "/", nil)
+
+	if got.status != http.StatusForbidden {
+		t.Fatalf("consent page for another peer: status %d, want 403", got.status)
+	}
+}
+
+func TestPublicListenerStaysClosedWithoutAUsablePublicURL(t *testing.T) {
+	t.Parallel()
+	for name, opts := range map[string]string{
+		"no options":     "",
+		"empty":          `{"public_url":""}`,
+		"plain http":     `{"public_url":"http://airlock.test"}`,
+		"with a path":    `{"public_url":"https://airlock.test/airlock"}`,
+		"not a URL":      `{"public_url":"airlock.test"}`,
+		"with user info": `{"public_url":"https://user@airlock.test"}`,
+	} {
+		r := startServer(t, opts)
+		if r.public != "" {
+			t.Errorf("%s: the public listener is open", name)
+		}
+		if got := r.asAdmin(t, http.MethodGet, "/", nil); got.status != http.StatusOK {
+			t.Errorf("%s: consent page status %d, want 200", name, got.status)
+		}
+		if !strings.Contains(r.log.String(), "no MCP access") {
+			t.Errorf("%s: the log does not say why there is no MCP access", name)
+		}
+	}
+}

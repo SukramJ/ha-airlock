@@ -25,12 +25,14 @@ Assistant App: one container beside Core.
 - **Language**: Go 1.27+ · module `github.com/SukramJ/ha-airlock`
 - **License**: Apache-2.0; contributions come under [`CLA.md`](./CLA.md).
 - **Deployment**: one static binary (`CGO_ENABLED=0`). No CGo.
-- **State of the code**: `cmd/ha-airlock` has four commands: no argument
-  prints the version, `probe` measures the ways to Core
-  (`notes/phase1-probe.md`), `audit verify` checks an audit log, and
-  `provision` gives ha-airlock its own Home Assistant user and records
-  that in the audit log — this is what the App's container runs. No MCP
-  server and no tool exist yet.
+- **State of the code**: `ha-airlock serve` is the server and what the
+  App's container runs: it provisions its own Home Assistant user, serves
+  the consent page through Ingress and, behind the owner's HTTPS reverse
+  proxy, the OAuth 2.1 authorization server and the MCP endpoint. Every
+  tool call passes `internal/gate`. The catalogue holds one tool,
+  `system_log_list` (R0). Not built: approval of actions, any tier above
+  R0, rate limits, the kill switch, the audit view in the UI. Other
+  commands: `probe`, `provision`, `audit verify`.
 
 Every tool call passes one chain, in this order:
 
@@ -187,9 +189,15 @@ ha-airlock/
 ├── internal/
 │   ├── audit/           — the audit log: hash-chained JSON lines, verification
 │   ├── build/           — version
+│   ├── catalog/         — the static tool catalogue: every tool, its tier, its endpoints
+│   ├── gate/            — the one enforcement point: identity, policy, tool, redaction, audit
 │   ├── hacore/          — client for Core's WebSocket API (hacoretest: its stand-in for tests)
+│   ├── mcpserver/       — the catalogue over MCP; every call goes to the gate
+│   ├── oauth/           — the authorization server (ADR 0004) and the consent page
+│   ├── policy/          — default-deny decisions per profile and tier
 │   ├── probe/           — reachability probe (Supervisor proxy and its identity, Core directly)
-│   ├── provision/       — the App's own Core user: creation, credential (provisiontest: stand-in Home Assistant)
+│   ├── provision/       — the App's own Core user: creation, credential, access to Core (provisiontest: stand-in Home Assistant)
+│   ├── redact/          — removes credentials and locations before anything leaves
 │   ├── supervisor/      — what the Supervisor tells the App (Core's address)
 │   └── repoguard/       — repository-wide guards (licence header)
 ├── docs/                — PUBLISHED documentation only
