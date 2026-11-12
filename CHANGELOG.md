@@ -13,3 +13,6 @@ All notable changes to ha-airlock are recorded here. The format follows
 - The read-out of phase 0 in `CONCEPT.md` §8 and §9, and the first two
   decision records: one Go App without an integration inside Core
   (ADR 0001), approval in the Ingress UI only (ADR 0002).
+- `CONCEPT.md`: the App provisions its own Home Assistant user on first
+  start, the scope of the Never list is stated against that, and the
+  attribution of a dedicated user's calls is measured on a running system.
