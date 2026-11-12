@@ -1,0 +1,34 @@
+name: Lock
+
+# Locks closed issues and merged/closed PRs so a months-old thread cannot
+# collect comments nobody is watching. Same cadence and the same inactivity
+# windows the sibling repositories use.
+#
+# Discussions are not touched: dessant/lock-threads only walks them when
+# `discussion-inactive-days` is set, and this repository has no discussions
+# surface to walk. Add the input (and `discussions: write` below) if that
+# changes.
+
+# yamllint disable-line rule:truthy
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  lock:
+    # Keeps forks from locking their own threads on this repository's cadence.
+    if: github.repository_owner == 'SukramJ'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dessant/lock-threads@89ae32b08ed1a541efecbab17912962a5e38981c # v6.0.2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          issue-inactive-days: "3"
+          issue-lock-reason: ""
+          pr-inactive-days: "0.1"
+          pr-lock-reason: ""

@@ -1,0 +1,12 @@
+# Changelog
+
+All notable changes to ha-airlock are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- The concept (`CONCEPT.md`), the assistant guide (`CLAUDE.md`), and the
+  repository skeleton: module, build and lint gates, licence-header guard.

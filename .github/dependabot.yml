@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # The module's own Go dependencies. The dependency set is deliberately
+  # small (CONCEPT.md §7), so a major bump gets its own PR rather than riding
+  # along in a group: it is a decision, not a version number.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions (pinned by commit SHA; Dependabot bumps the SHA and
+  # keeps the `# vX` version comment in sync).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns: ["*"]

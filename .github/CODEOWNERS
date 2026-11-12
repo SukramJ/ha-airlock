@@ -1,0 +1,23 @@
+# Code owners for ha-airlock.
+#
+# Owners are auto-requested for review on PRs that touch the matching
+# paths. Branch protection does not *require* code-owner approval (the
+# project runs with a single maintainer who cannot self-approve), so
+# this file's job is review routing and signalling which zones carry
+# extra obligations — see CLAUDE.md.
+
+# Default owner for everything in the repo.
+*                               @SukramJ
+
+# The composition root: where every tool is wired behind policy, redaction
+# and audit. See CLAUDE.md "Wiring".
+/cmd/                           @SukramJ
+
+# Design intent and architecture decisions.
+/CONCEPT.md                     @SukramJ
+/docs/adr/                      @SukramJ
+
+# Build, CI and supply-chain surface.
+/.github/                       @SukramJ
+/Makefile                       @SukramJ
+/go.mod                         @SukramJ

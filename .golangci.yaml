@@ -1,0 +1,125 @@
+version: "2"
+run:
+  go: "1.27"
+  tests: true
+  allow-parallel-runners: true
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - errcheck
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - funlen
+    - gocognit
+    - gocritic
+    - gocyclo
+    - gosec
+    - govet
+    - intrange
+    - makezero
+    - nilerr
+    - noctx
+    - perfsprint
+    - prealloc
+    - reassign
+    - revive
+    - sloglint
+    - staticcheck
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - wastedassign
+  settings:
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    forbidigo:
+      forbid:
+        # A component logs through its own logger. slog.Default() as a
+        # constructor's fallback has no selector after the call and is not
+        # matched.
+        - pattern: ^slog\.Default\(\)\.\w+
+          msg: take the logger from the component, not slog.Default().<method> inline
+    funlen:
+      lines: 100
+      statements: 60
+    gocognit:
+      min-complexity: 50
+    gocyclo:
+      min-complexity: 30
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - hugeParam
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+        - opinionated
+    gosec:
+      excludes:
+        - G104
+    sloglint:
+      no-mixed-args: true
+      static-msg: false
+    revive:
+      severity: warning
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - contextcheck
+          - errcheck
+          - funlen
+          - gocognit
+          - gocyclo
+          - gosec
+          - noctx
+          - unparam
+        path: _test\.go
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra:
+        group-params: true
+    goimports:
+      local-prefixes:
+        - github.com/SukramJ/ha-airlock
+  exclusions:
+    generated: lax

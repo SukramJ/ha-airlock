@@ -1,0 +1,114 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CGO_ENABLED: "0"
+  GO_VERSION: "1.27.3"
+  # The lint tools are pinned on purpose, and pinned to the same versions the
+  # sibling repositories use. A new lint release adds checks that are style
+  # decisions, and floating on @latest makes this gate report on the calendar
+  # rather than on the diff — main goes from green to red overnight on an
+  # unchanged tree.
+  #
+  # Bump deliberately: raise the version here and in the Makefile, run the
+  # linter locally, and fix or justify whatever the new release finds in the
+  # same change.
+  GOFUMPT_VERSION: "v0.12.0"
+  GOLANGCI_LINT_VERSION: "v2.14.0"
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: go build
+        run: make build
+      # The binary is the product: prove the static build starts.
+      - name: smoke
+        run: ./bin/ha-airlock
+
+  vet:
+    name: vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # Overlaps with the govet linter in the lint job, but runs even when a
+      # lint failure elsewhere in the config stops that job early.
+      - name: go vet
+        run: make vet
+
+  test:
+    name: test (linux, race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # -race requires cgo, so this one step overrides the module-wide
+      # CGO_ENABLED=0.
+      - name: go test (race)
+        env:
+          CGO_ENABLED: "1"
+        run: make race
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install pinned lint tooling
+        run: go install mvdan.cc/gofumpt@${{ env.GOFUMPT_VERSION }}
+      # Install golangci-lint v2 from source with the Go toolchain set up
+      # above. The prebuilt binary ships built with an older Go and refuses
+      # to run against a module targeting a newer one.
+      - name: golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
+      # make lint runs the same gofumpt check, config verify, linter run and
+      # module-hygiene steps a contributor gets locally, so the two cannot
+      # drift apart.
+      - name: lint
+        run: make lint
+
+  vuln:
+    name: security (vuln)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # Floating on purpose (see the Makefile): a new advisory should turn
+      # this red without a commit. It is therefore not a required check —
+      # a red main must not block an unrelated pull request.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          make vuln
