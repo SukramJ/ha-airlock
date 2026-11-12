@@ -1,6 +1,6 @@
 # ADR 0004 — The authorization server lives in the App; consent is given in the Ingress UI
 
-Status: proposed, 2026-11-12. Not implemented.
+Status: accepted, 2026-11-12 (owner decision). Not implemented yet.
 
 ## Context
 

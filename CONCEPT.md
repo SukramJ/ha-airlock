@@ -36,7 +36,7 @@ Owner decisions of 2026-11-12:
 | Topic | Decision |
 | --- | --- |
 | Architecture | A Go App: one container beside Home Assistant Core, one static binary, the only place where auth, policy and audit are enforced |
-| Access | Local and remote clients, each with its own profile |
+| Access | Clients authenticate with OAuth 2.1 against an authorization server inside the App, behind the owner's HTTPS reverse proxy. Each approved client gets one of two profiles, local or remote, assigned by the owner at approval ([ADR 0004](docs/adr/0004-the-authorization-server-lives-in-the-app.md)) |
 | Write scope | Device control, configuration, system and Apps, files / YAML — each switchable per policy |
 | Diagnosis | Analysing problems with Home Assistant comprehensively is a first-class goal |
 | Approval | Out-of-band, inside Home Assistant — never through the model's channel. Given in the Ingress UI only; a push notification is a notice ([ADR 0002](docs/adr/0002-approval-in-the-ingress-ui-only.md)) |
@@ -73,7 +73,9 @@ MCP client
 | **R4 Files / YAML** | Read and write below `/config` behind a path allowlist | approval with diff and config check | blocked |
 | **Never** | Shell or code execution, user and token management, `secrets.yaml`, `.storage/auth*`, installing Apps from third-party repositories or HACS | — | — |
 
-The two profile columns are starting values. Everything can be narrowed in
+A profile is assigned to a client when the owner approves it; the server
+does not derive it from where a request comes from. The two profile columns
+are starting values. Everything can be narrowed in
 the policy file; nothing in the **Never** row can be enabled by policy.
 
 The **Never** row governs what a client can reach: no tool creates, changes
@@ -101,9 +103,11 @@ leaves the house (section 6, redaction).
 - **Results are marked as untrusted.** Entity names, log lines and
   notification texts can carry injection payloads.
 - **Auth:** OAuth 2.1 with PKCE and one identity per client; no secret-URL
-  model. The local listener binds to Ingress / loopback only, Host and Origin
-  validation on. The remote endpoint is a separate listener with its own
-  profile.
+  model. The authorization server is part of the App; a client is admitted
+  only after an administrator approved it in the Ingress UI. One listener,
+  on a port that is closed after installation, reached through the owner's
+  HTTPS reverse proxy, with the Host header checked against the configured
+  public URL (ADR 0004).
 - **Kill switch** in the UI, and rate limits per client.
 - **Static tool catalogue.** No dynamic tools, no generic "call any API".
 - **Reversibility.** A snapshot before every R2 / R4 write, with undo; a Home
@@ -359,4 +363,4 @@ Assistant OS / Supervised).
 2. **R1** with the approval mechanism.
 3. **R2** with snapshot and undo.
 4. **R3**, then **R4**.
-5. The **remote listener** with OAuth, last.
+5. The **remote profile** opened up for use from outside the home, last.
