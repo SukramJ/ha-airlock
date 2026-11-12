@@ -180,7 +180,7 @@ record the answer here.
 ```
 ha-airlock/
 ├── CONCEPT.md  CLAUDE.md  CHANGELOG.md  Makefile
-├── config.yaml  Dockerfile  — the Home Assistant App: Supervisor config and image
+├── config.yaml  Dockerfile  repository.yaml  — the Home Assistant App: Supervisor config, image, App repository
 ├── cmd/ha-airlock/      — the server (composition root)
 ├── internal/
 │   ├── build/           — version
