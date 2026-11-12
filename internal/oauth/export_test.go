@@ -3,7 +3,11 @@
 
 package oauth
 
-import "time"
+import (
+	"crypto/x509"
+	"net/netip"
+	"time"
+)
 
 // SetClock replaces the store's clock in tests.
 func (s *Store) SetClock(now func() time.Time) {
@@ -20,3 +24,12 @@ const (
 	RefreshIdle     = refreshIdle
 	MaxPending      = maxPending
 )
+
+// NewTestFetcher returns a fetcher that trusts roots and connects to any
+// address, for tests that serve a metadata document on loopback.
+func NewTestFetcher(roots *x509.CertPool) *Fetcher {
+	return newFetcher(func(netip.Addr) bool { return true }, roots)
+}
+
+// IsPublicAddress exposes the address classification.
+var IsPublicAddress = isPublicAddress
