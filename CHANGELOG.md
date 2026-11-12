@@ -35,6 +35,7 @@ All notable changes to ha-airlock are recorded here. The format follows
   the logbook and as a notification. A user of that name that the App did
   not create is never taken over. The App's container now runs this
   command. See `docs/own-user.md`.
+- `CONCEPT.md` §9: provisioning measured on a running Home Assistant.
 
 ### Changed
 
