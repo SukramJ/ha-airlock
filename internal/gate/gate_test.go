@@ -39,6 +39,8 @@ type fixture struct {
 	gate      *gate.Gate
 	auditPath string
 	runs      map[catalog.Tier]*atomic.Int32
+	// halted is the kill switch of the test.
+	halted *atomic.Bool
 }
 
 func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture {
@@ -49,13 +51,13 @@ func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture 
 		t.Fatalf("open audit log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	f := fixture{auditPath: path, runs: map[catalog.Tier]*atomic.Int32{}}
+	f := fixture{auditPath: path, runs: map[catalog.Tier]*atomic.Int32{}, halted: &atomic.Bool{}}
 	tools := extra
 	for _, tier := range catalog.Tiers() {
 		f.runs[tier] = &atomic.Int32{}
 		tools = append(tools, probeTool(tier, f.runs[tier]))
 	}
-	f.gate = gate.New(pol, log, nil, tools, 5*time.Second)
+	f.gate = gate.New(gate.Config{Policy: pol, Audit: log, Tools: tools, Timeout: 5 * time.Second, Halted: f.halted.Load})
 	return f
 }
 
@@ -283,7 +285,9 @@ func (failingLog) Append(context.Context, audit.Entry) (audit.Receipt, error) {
 func TestResultIsWithheldWhenTheCallCannotBeRecorded(t *testing.T) {
 	t.Parallel()
 	var runs atomic.Int32
-	g := gate.New(policy.Default(), failingLog{}, nil, []catalog.Tool{probeTool(catalog.R0, &runs)}, time.Second)
+	g := gate.New(gate.Config{
+		Policy: policy.Default(), Audit: failingLog{}, Tools: []catalog.Tool{probeTool(catalog.R0, &runs)}, Timeout: time.Second,
+	})
 
 	out, err := g.Call(context.Background(), localClient, "probe_R0", nil)
 
@@ -322,5 +326,92 @@ func TestEveryCatalogueToolIsDecidedByThePolicy(t *testing.T) {
 		if got != want {
 			t.Errorf("tool %s (tier %s): decision %s, want %s", tool.Name, tool.Tier, got, want)
 		}
+	}
+}
+
+func TestEngagedKillSwitchRefusesEveryCallAndRecordsIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R0":"allow","R1":"allow","R2":"allow","R3":"allow","R4":"allow"}}}`))
+	f.halted.Store(true)
+
+	for _, tier := range catalog.Tiers() {
+		out, err := f.gate.Call(context.Background(), localClient, "probe_"+string(tier), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tier, err)
+		}
+		if out.Allowed || out.Output != nil || f.runs[tier].Load() != 0 {
+			t.Errorf("%s ran although the kill switch is engaged", tier)
+		}
+	}
+	records := f.records(t)
+	if len(records) != len(catalog.Tiers()) {
+		t.Fatalf("%d audit records, want %d", len(records), len(catalog.Tiers()))
+	}
+	for _, r := range records {
+		if r["decision"] != "halted" || r["result"] != "refused" {
+			t.Errorf("audit record = %v", r)
+		}
+	}
+
+	f.halted.Store(false)
+	if out, _ := f.gate.Call(context.Background(), localClient, "probe_R0", nil); !out.Allowed {
+		t.Fatal("the gate stayed closed after the kill switch was released")
+	}
+}
+
+func TestClientIsLimitedToItsCallsPerMinuteAndRecovers(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R0":"allow"}},"limits":{"local":{"calls_per_minute":3}}}`))
+	now := time.Unix(1_800_000_000, 0)
+	f.gate.SetClock(func() time.Time { return now })
+	other := &gate.Principal{Client: "client-b", Profile: policy.ProfileLocal}
+
+	for i := range 3 {
+		if out, _ := f.gate.Call(context.Background(), localClient, "probe_R0", nil); !out.Allowed {
+			t.Fatalf("call %d within the limit was refused", i+1)
+		}
+	}
+	out, err := f.gate.Call(context.Background(), localClient, "probe_R0", nil)
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if out.Allowed || f.runs[catalog.R0].Load() != 3 {
+		t.Fatalf("the fourth call ran: allowed = %t, runs = %d", out.Allowed, f.runs[catalog.R0].Load())
+	}
+	records := f.records(t)
+	if last := records[len(records)-1]; last["decision"] != "rate_limited" || last["result"] != "refused" {
+		t.Fatalf("audit record of the refused call = %v", last)
+	}
+
+	// Another client has its own allowance.
+	if out, _ := f.gate.Call(context.Background(), other, "probe_R0", nil); !out.Allowed {
+		t.Fatal("another client was refused because of the first one's calls")
+	}
+
+	// A third of a minute refills one call of three.
+	now = now.Add(21 * time.Second)
+	if out, _ := f.gate.Call(context.Background(), localClient, "probe_R0", nil); !out.Allowed {
+		t.Fatal("the client was still refused after waiting")
+	}
+	if out, _ := f.gate.Call(context.Background(), localClient, "probe_R0", nil); out.Allowed {
+		t.Fatal("the client got more than its refill")
+	}
+}
+
+// Refused calls count too, so a client cannot fill the audit log faster
+// than its limit allows.
+func TestRefusedCallsCountAgainstTheLimit(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R0":"allow"}},"limits":{"local":{"calls_per_minute":2}}}`))
+	now := time.Unix(1_800_000_000, 0)
+	f.gate.SetClock(func() time.Time { return now })
+
+	for range 2 {
+		if _, err := f.gate.Call(context.Background(), localClient, "no_such_tool", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, _ := f.gate.Call(context.Background(), localClient, "probe_R0", nil); out.Allowed {
+		t.Fatal("an allowed call ran after the limit was used up by refused ones")
 	}
 }

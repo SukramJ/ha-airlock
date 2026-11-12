@@ -59,6 +59,11 @@ All notable changes to ha-airlock are recorded here. The format follows
   `trace_list`, `logbook_events`.
 - `ha-airlock tools` prints the list of tools from the catalogue;
   `docs/tools.md` is its output, and a test fails when they differ.
+- The kill switch (`internal/halt`): one button in the sidebar page makes
+  the gate refuse every tool call until it is released; the state survives
+  a restart.
+- A limit of tool calls per minute and client, 60 for the `local` profile
+  and 30 for `remote`, adjustable with `limits` in `policy.json`.
 
 ### Changed
 

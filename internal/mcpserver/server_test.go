@@ -80,7 +80,7 @@ func newFixture(t *testing.T) fixture {
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	core := &fakeCore{}
-	g := gate.New(policy.Default(), log, core, catalog.All(), 5*time.Second)
+	g := gate.New(gate.Config{Policy: policy.Default(), Audit: log, Core: core, Tools: catalog.All(), Timeout: 5 * time.Second})
 	server := mcpserver.New(g, catalog.All(), "test")
 	// The handler needs the host it is served under, which exists only once
 	// the test server listens.

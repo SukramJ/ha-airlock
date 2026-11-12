@@ -111,7 +111,28 @@ HTTPS, without following redirects.
 An application that can only register itself dynamically (OAuth Dynamic
 Client Registration) cannot connect.
 
+## Stopping everything
+
+The sidebar page has a kill switch. **Halt all tool calls** makes ha-airlock
+refuse every tool call of every application at once, until you release it.
+The state survives a restart of the App. Halting works even if it cannot be
+written to the audit log; releasing does not.
+
+## How many calls an application may make
+
+Each approved application may make a number of tool calls per minute: 60
+with the `local` profile, 30 with `remote`. Calls that are refused count
+too. To change the numbers, add `limits` to `policy.json`:
+
+```json
+{
+  "version": 1,
+  "profiles": { "local": { "R0": "allow" } },
+  "limits": { "local": { "calls_per_minute": 20 } }
+}
+```
+
 ## Not there yet
 
-- Rate limits and a kill switch.
+- A view of the audit log in the sidebar page.
 - Any tool that changes something.

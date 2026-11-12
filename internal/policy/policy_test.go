@@ -82,3 +82,33 @@ func TestParseRejectsWhatItDoesNotKnow(t *testing.T) {
 		}
 	}
 }
+
+func TestCallLimitsHaveDefaultsAndCanBeSet(t *testing.T) {
+	t.Parallel()
+	d := policy.Default()
+	if d.CallsPerMinute(policy.ProfileLocal) != 60 || d.CallsPerMinute(policy.ProfileRemote) != 30 || d.CallsPerMinute("unknown") != 30 {
+		t.Fatalf("default limits: local %d, remote %d, unknown %d",
+			d.CallsPerMinute(policy.ProfileLocal), d.CallsPerMinute(policy.ProfileRemote), d.CallsPerMinute("unknown"))
+	}
+
+	p, err := policy.Parse([]byte(`{"version":1,"profiles":{},"limits":{"remote":{"calls_per_minute":5}}}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if p.CallsPerMinute(policy.ProfileRemote) != 5 || p.CallsPerMinute(policy.ProfileLocal) != 60 {
+		t.Fatalf("limits: remote %d, local %d", p.CallsPerMinute(policy.ProfileRemote), p.CallsPerMinute(policy.ProfileLocal))
+	}
+
+	for name, text := range map[string]string{
+		"unknown profile": `{"version":1,"profiles":{},"limits":{"admin":{"calls_per_minute":5}}}`,
+		"zero":            `{"version":1,"profiles":{},"limits":{"local":{"calls_per_minute":0}}}`,
+		"negative":        `{"version":1,"profiles":{},"limits":{"local":{"calls_per_minute":-1}}}`,
+		"too large":       `{"version":1,"profiles":{},"limits":{"local":{"calls_per_minute":100000}}}`,
+		"unknown key":     `{"version":1,"profiles":{},"limits":{"local":{"calls_per_hour":5}}}`,
+		"missing value":   `{"version":1,"profiles":{},"limits":{"local":{}}}`,
+	} {
+		if _, err := policy.Parse([]byte(text)); err == nil {
+			t.Errorf("%s: accepted %s", name, text)
+		}
+	}
+}
