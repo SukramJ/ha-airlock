@@ -10,3 +10,6 @@ All notable changes to ha-airlock are recorded here. The format follows
 
 - The concept (`CONCEPT.md`), the assistant guide (`CLAUDE.md`), and the
   repository skeleton: module, build and lint gates, licence-header guard.
+- The read-out of phase 0 in `CONCEPT.md` §8 and §9, and the first two
+  decision records: one Go App without an integration inside Core
+  (ADR 0001), approval in the Ingress UI only (ADR 0002).

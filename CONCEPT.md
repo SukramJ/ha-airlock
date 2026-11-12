@@ -39,7 +39,9 @@ Owner decisions of 2026-11-12:
 | Access | Local and remote clients, each with its own profile |
 | Write scope | Device control, configuration, system and Apps, files / YAML — each switchable per policy |
 | Diagnosis | Analysing problems with Home Assistant comprehensively is a first-class goal |
-| Approval | Out-of-band, inside Home Assistant — never through the model's channel |
+| Approval | Out-of-band, inside Home Assistant — never through the model's channel. Given in the Ingress UI only; a push notification is a notice ([ADR 0002](docs/adr/0002-approval-in-the-ingress-ui-only.md)) |
+| Cut | One Go App, no integration inside Core ([ADR 0001](docs/adr/0001-one-go-app-no-core-integration.md)) |
+| Core identity | A dedicated Home Assistant user with its own token, connected to Core directly, so that actions are attributable. The Supervisor proxy is not used for Core calls. Subject to the reachability check in section 9; an ADR follows it |
 | Name | `ha-airlock`, without a `go-` prefix: an end-user product installed as an App, like `openccu-loom` |
 
 ```
@@ -53,6 +55,7 @@ MCP client
 │  Ingress UI              │
 └──────┬──────────┬────────┘
        │ WS/REST  │ Supervisor API
+       │ own user │ App token
        ▼          ▼
    HA Core     Supervisor (Apps,
                backups, updates)
@@ -81,8 +84,10 @@ leaves the house (section 6, redaction).
   domains, entities (for example through a Home Assistant label) and quantity
   limits.
 - **Approval outside the model's channel.** A risky action is parked; the
-  owner confirms it in the Ingress UI or by push notification. The approval
-  is bound to the hash of the exact arguments and expires.
+  owner confirms it in the Ingress UI, as the Home Assistant user the
+  Supervisor names. A push notification announces the waiting approval and
+  carries neither a button nor the action's text. The approval is bound to
+  the hash of the exact arguments and expires.
 - **The approval text comes from the server.** It is rendered from the
   structured arguments, never from text the model supplied — a manipulated
   model would otherwise describe a dangerous action as harmless.
@@ -136,10 +141,15 @@ not break behaviour silently.
   client's responsibility. ha-airlock inverts that premise, and everything in
   sections 5 and 6 follows from the inversion. It is also deliberately
   smaller.
-- *Home Assistant's own `mcp_server` integration:* it exists in Core
-  (section 9). What it exposes was not read for this concept, so no
-  comparison is claimed here. **Open:** read it before phase 1 and record the
-  comparison in this section.
+- *Home Assistant's own `mcp_server` integration* (read for phase 0,
+  section 9): it serves Home Assistant's LLM APIs over MCP. Its admin-only
+  "Home Assistant" API already reads Core and Supervisor logs and calls any
+  action, so ha-airlock is not the only way to diagnose over MCP, and R0
+  overlaps with it. What it does not have is what this concept is about: no
+  approval step, no audit log beyond a debug line, no redaction, no tiered
+  policy — the choice is one read-only switch and an admin check — and no
+  Supervisor access beyond logs. It runs inside Core, without a process
+  boundary between the guard and what it guards.
 
 **Better than before?** Greenfield — there is no earlier state.
 
@@ -150,8 +160,8 @@ audit. The alternative cuts were weighed and not chosen:
   and what it guards.
 - A hybrid (Go App plus a small integration for native entities and approval
   dialogs) costs a second component in a second language to maintain and to
-  audit. It remains the fallback if phase 0 shows that out-of-band approval
-  needs code inside Core.
+  audit. Phase 0 showed that approval needs no code inside Core, so it is no
+  longer a fallback (ADR 0001).
 
 The accepted limit of this cut: it runs only where a Supervisor exists (Home
 Assistant OS / Supervised).
@@ -198,27 +208,110 @@ Assistant OS / Supervised).
 - Core ships an `mcp_server` integration ("Model Context Protocol",
   depending on `http` and `conversation`: `mcp_server/manifest.json:3`, `:7`).
 
-**Unverified** — from general knowledge, to be settled in phase 0:
+**Measured in phase 0 — Supervisor**, local checkout at `98a2322`
+(2026-11-12), paths below `supervisor/`:
 
-- Which Supervisor role an App needs for logs, backups and App control, and
-  which Core user an App's Supervisor-issued token acts as. The Supervisor
-  source is not checked out locally.
-- Whether a dedicated user's actions appear in the logbook attributed to that
-  user in a form the owner finds readable. The context carries the
-  `user_id` (measured above); the rendering was not checked.
-- Whether out-of-band approval by push notification works without code
-  inside Core. A grep for `notification_action` in
-  `homeassistant/components/mobile_app/` found nothing, so the event an
-  actionable notification raises is not yet located.
-- The maturity of the Go MCP SDK for OAuth 2.1.
-- Whether Home Assistant's diagnostics downloads are already redacted by the
-  integrations that produce them. ha-airlock redacts regardless.
+- An App declares one of five roles: `default`, `homeassistant`, `backup`,
+  `manager`, `admin` (`const.py:485-491`). The role → path map is
+  `role_access` (`api/middleware/security.py:123-173`); it applies only when
+  the App also has `hassio_api` (`security.py:452-453`).
+- `/supervisor/logs`, `/host/logs` and another App's `/addons/{app}/logs`
+  (`api/__init__.py:645`, `:278`, `:789`) are matched only by the `manager`
+  and `admin` patterns, as are App start / stop / options
+  (`api/__init__.py:776-779`). `backup` covers `/backups.*` only. `manager`
+  is therefore the smallest role for the R0 and R3 scope, and it is broad:
+  it also opens `/store.*`, `/docker/.+`, `/os/…` and `/security/.+`. It
+  costs one point of the App's security rating (`apps/utils.py:76-77`).
+- The Core proxy is gated by `homeassistant_api`, not by the role
+  (`api/proxy.py:127-149`, WebSocket `:383-388`). The App's own
+  `Authorization` header is not forwarded (`proxy.py:160-164`); the request
+  reaches Core under the Supervisor's identity. WebSocket frames whose type
+  starts with `supervisor/` or `hassio/` are refused (`proxy.py:50`).
+- That identity is Core's system user "Supervisor", an admin (Core
+  `hassio/__init__.py:228-240`), authenticated by the Unix socket (Core
+  `http/auth.py:189-211`). Every App that uses the proxy acts as this one
+  user, so calls through the proxy are not attributable to ha-airlock in
+  Home Assistant's own records.
+- For an Ingress request the Supervisor sets `X-Remote-User-Id`, and name,
+  display name and groups when present, after dropping client-supplied
+  copies (`api/ingress.py:400-418`). The Ingress UI therefore learns who
+  approves without a login of its own.
+
+**Measured in phase 0 — Home Assistant Core** at `3f8160ce7ff`, frontend at
+`b1164739c3` (2026-11-11):
+
+- *Actionable notifications.* Core does not define
+  `mobile_app_notification_action`; its only occurrence is a blueprint
+  (`script/blueprints/confirmable_notification.yaml:75`). The companion app
+  raises it through the generic `fire_event` webhook, which fires any event
+  type with any data under the context of the user who registered the
+  device (`mobile_app/webhook.py:304-321`, `mobile_app/helpers.py:128-130`).
+  Subscribing needs an admin: the event is not in `SUBSCRIBE_ALLOWLIST`
+  (`websocket_api/commands.py:199-205`, `auth/permissions/events.py:30-50`).
+  Push approval therefore needs no code inside Core, but the answer arrives
+  as an event any registered device can fire with any content.
+- Repairs issues cannot be created over the API; the WebSocket commands are
+  get, ignore and list (`repairs/websocket_api.py:31-33`).
+- *Logbook attribution.* An entry carries `context_user_id`
+  (`logbook/processor.py:435-436`), and `logbook.log` passes the caller's
+  context on (`logbook/services.py:54`). The frontend resolves the id to a
+  name from person entities, and from the user list only for an admin
+  viewer (frontend `src/panels/logbook/ha-logbook.ts:536-558`).
+- *`mcp_server`.* Four views, among them `/api/mcp` and
+  `/api/mcp/{api_id}` (`mcp_server/http.py:68`, `:86-91`, `:404`); Home
+  Assistant's own auth (`helpers/http.py:136`), no OAuth of its own. A new
+  entry serves all LLM APIs, requires an admin and is not read-only
+  (`mcp_server/config_flow.py:116-123`). Tool calls run under the calling
+  user's context (`helpers/http.py:142-147`, `mcp_server/http.py:180-186`).
+  The admin-only "Home Assistant" API (`llm/__init__.py:181-184`) offers
+  `homeassistant__call_action`, which calls any action
+  (`homeassistant/llm.py:557`, `:622-627`), `system_log__get_logs`
+  (`system_log/llm.py:298`) and `hassio__get_logs` (`hassio/llm.py:45`).
+  The only record of a call is a debug log line (`mcp_server/server.py:221`).
+- *Diagnostics are not redacted centrally.* The download view passes the
+  integration's `data` through (`diagnostics/__init__.py:217-223`);
+  redaction is the integration's choice. 140 of 428
+  `components/*/diagnostics.py` files do not contain the string "redact"
+  (a text grep, not a proof that they leak);
+  `airgradient/diagnostics.py:16` returns its data as is.
+
+**Measured in phase 0 — Go MCP SDK**, `modelcontextprotocol/go-sdk` at
+`328036e` (2026-11-10), latest release `v1.8.0` (2026-09-04):
+
+- Streamable HTTP with DNS-rebinding protection on loopback
+  (`mcp/streamable.go:386-391`), typed tools (`mcp.AddTool`,
+  `mcp/server.go:628`) and a middleware around every incoming method
+  (`AddReceivingMiddleware`, `mcp/server.go:2087`).
+- OAuth as a resource server only: bearer-token middleware
+  (`auth/auth.go:97`) and RFC 9728 metadata (`auth/auth.go:197`). It
+  contains no authorization server — a grep for endpoint registrations in
+  `auth/` and `oauthex/` found client-side metadata types only.
+- Eight direct dependencies (`go.mod`), among them `golang-jwt/jwt`,
+  `golang.org/x/oauth2` and `golang.org/x/tools`. "Standard library plus an
+  MCP SDK" (section 7) is this set, not one module.
+- Licence: Apache-2.0 for new contributions, MIT for existing code
+  (`README.md:170`).
+
+**Unverified:**
+
+- Whether an App can reach Core directly with a token of its own, as a
+  dedicated user instead of through the proxy. The Supervisor source shows
+  nothing that forbids it; it was not tried.
+- How the logbook renders a dedicated user's actions on a running system.
+  The code path is measured above; no instance was looked at.
+- The payload of the notification-action event. The companion app builds
+  it, and its source was not read.
+- That the Go MCP SDK builds with `CGO_ENABLED=0`. A grep for `import "C"`
+  found nothing, without a control that it would have.
+- Which authorization server the remote listener uses. The SDK does not
+  provide one, and the specification revision in force was read only as a
+  draft page.
 
 ## 10. Phases
 
-0. **Verification spike.** Settle every item of the *Unverified* list
-   against the owner's instance and the Supervisor source; read Core's
-   `mcp_server`. The result decides between the Go App alone and the hybrid.
+0. **Verification spike.** The source reading is done and decided the cut
+   (ADR 0001, ADR 0002). What remains is the *Unverified* list of section 9,
+   settled against the owner's instance.
 1. **R0** with audit, redaction and the Ingress UI — the diagnostic benefit
    without any write risk.
 2. **R1** with the approval mechanism.
