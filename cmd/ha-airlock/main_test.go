@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/SukramJ/ha-airlock/internal/audit"
+	"github.com/SukramJ/ha-airlock/internal/hacore/hacoretest"
 )
 
 func TestRunWithoutArgumentsPrintsTheVersion(t *testing.T) {
@@ -80,6 +81,9 @@ func TestProbeCommandRunsEveryCheckAndKeepsTheTokenOutOfTheLog(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{}`)
 	})
+	mux.Handle("/core/websocket", hacoretest.Handler(token, map[string]string{
+		"auth/current_user": `{"id":"abc","name":"Supervisor","is_admin":true,"is_owner":false}`,
+	}))
 	supervisor := httptest.NewServer(mux)
 	t.Cleanup(supervisor.Close)
 
@@ -91,8 +95,8 @@ func TestProbeCommandRunsEveryCheckAndKeepsTheTokenOutOfTheLog(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want %d; log:\n%s", code, exitOK, out.String())
 	}
-	if got := strings.Count(out.String(), "outcome=ok"); got != 3 {
-		t.Fatalf("log has %d ok outcomes, want 3:\n%s", got, out.String())
+	if got := strings.Count(out.String(), "outcome=ok"); got != 4 {
+		t.Fatalf("log has %d ok outcomes, want 4:\n%s", got, out.String())
 	}
 	if strings.Contains(out.String(), token) {
 		t.Fatal("the log contains the Supervisor token")

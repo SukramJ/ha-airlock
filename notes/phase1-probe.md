@@ -6,13 +6,14 @@ container reaches Core directly, and whether the Supervisor proxy answers.
 
 ## What the probe does
 
-`ha-airlock probe`, run once by the container, makes three GET requests and
+`ha-airlock probe`, run once by the container, makes three GET requests and one WebSocket call and
 logs one line each:
 
 | Check | Request | Expected |
 | --- | --- | --- |
 | supervisor: core info | `http://supervisor/core/info` with the App's token | 200, carrying Core's port and scheme |
 | core through the supervisor proxy | `http://supervisor/core/api/config` with the App's token | 200 |
+| identity through the supervisor proxy | `auth/current_user` over `ws://supervisor/core/websocket`, authenticated with the App's token | an answer; the user it names is reported, not expected |
 | core directly, without a credential | `http(s)://homeassistant:<port>/api/` without any header | 401 |
 
 Core's port is read from the first answer, never assumed. If that answer is
@@ -84,3 +85,13 @@ check="core directly, without a credential" outcome=ok status=401
 
 The Supervisor reported the App with role `default` and a security rating
 of 7.
+
+## The fourth check
+
+Added after the first run, so the result above shows three lines. The
+proxy's WebSocket takes the App's token in the auth message
+(`supervisor/api/proxy.py:383-386`, Supervisor `98a2322`). The client
+behind it was run against the owner's Core directly, read-only: connected
+as the dedicated user, `get_states` returned 4895 states, an unknown
+command returned Core's `unknown_command`, and a wrong token was refused.
+The check itself has not run inside an App container yet.

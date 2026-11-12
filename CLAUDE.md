@@ -186,7 +186,8 @@ ha-airlock/
 ├── internal/
 │   ├── audit/           — the audit log: hash-chained JSON lines, verification
 │   ├── build/           — version
-│   ├── probe/           — reachability probe (Supervisor proxy, Core directly)
+│   ├── hacore/          — client for Core's WebSocket API (hacoretest: its stand-in for tests)
+│   ├── probe/           — reachability probe (Supervisor proxy and its identity, Core directly)
 │   └── repoguard/       — repository-wide guards (licence header)
 ├── docs/                — PUBLISHED documentation only
 └── notes/               — engineering working docs, NEVER published

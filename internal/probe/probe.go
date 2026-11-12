@@ -2,20 +2,25 @@
 // Copyright (C) 2026 SukramJ.
 
 // Package probe measures, from inside the App container, which ways to Home
-// Assistant Core are open: through the Supervisor's proxy and directly. It
-// only reads, and it sends the Supervisor token to the Supervisor alone.
+// Assistant Core are open: through the Supervisor's proxy and directly, and
+// as which Home Assistant user the proxy acts. It only reads, and it sends
+// the Supervisor token to the Supervisor alone.
 package probe
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/SukramJ/ha-airlock/internal/hacore"
 )
 
 // Outcome is the verdict on one check.
@@ -35,9 +40,10 @@ const (
 
 // Names of the checks, in the order Run performs them.
 const (
-	CheckCoreInfo   = "supervisor: core info"
-	CheckCoreProxy  = "core through the supervisor proxy"
-	CheckCoreDirect = "core directly, without a credential"
+	CheckCoreInfo      = "supervisor: core info"
+	CheckCoreProxy     = "core through the supervisor proxy"
+	CheckProxyIdentity = "identity through the supervisor proxy"
+	CheckCoreDirect    = "core directly, without a credential"
 )
 
 // Result is what one check found.
@@ -127,6 +133,8 @@ func (p *Prober) Run(ctx context.Context) Report {
 	add(p.expectStatus(ctx, CheckCoreProxy,
 		p.cfg.SupervisorURL+"/core/api/config", p.cfg.SupervisorToken, http.StatusOK))
 
+	add(p.proxyIdentity(ctx))
+
 	if infoResult.Outcome != OutcomeOK {
 		add(Result{
 			Check:   CheckCoreDirect,
@@ -178,6 +186,42 @@ func (p *Prober) coreInfo(ctx context.Context) (coreInfo, Result) {
 	res.Outcome = OutcomeOK
 	res.Detail = fmt.Sprintf("port %d, ssl %t", info.Data.Port, info.Data.SSL)
 	return info, res
+}
+
+// proxyIdentity asks Core, over the proxy's WebSocket, which user the
+// connection acts as. It reports what Core says and expects no particular
+// name.
+func (p *Prober) proxyIdentity(ctx context.Context) Result {
+	res := Result{Check: CheckProxyIdentity}
+	ctx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
+	defer cancel()
+
+	// The proxy's WebSocket lives beside its HTTP API, under the ws scheme.
+	url := "ws" + strings.TrimPrefix(p.cfg.SupervisorURL, "http") + "/core/websocket"
+	conn, err := hacore.Dial(ctx, url, p.cfg.SupervisorToken)
+	if err != nil {
+		res.Outcome = OutcomeUnreachable
+		if errors.Is(err, hacore.ErrAuthInvalid) {
+			res.Outcome = OutcomeUnexpected
+		}
+		res.Detail = err.Error()
+		return res
+	}
+	defer func() { _ = conn.Close() }()
+
+	var user struct {
+		Name    string `json:"name"`
+		IsAdmin bool   `json:"is_admin"`
+		IsOwner bool   `json:"is_owner"`
+	}
+	if err := conn.Call(ctx, "auth/current_user", nil, &user); err != nil {
+		res.Outcome = OutcomeUnexpected
+		res.Detail = err.Error()
+		return res
+	}
+	res.Outcome = OutcomeOK
+	res.Detail = fmt.Sprintf("user %q, admin %t, owner %t", user.Name, user.IsAdmin, user.IsOwner)
+	return res
 }
 
 // expectStatus requests url and compares the status with want.

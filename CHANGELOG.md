@@ -25,7 +25,13 @@ All notable changes to ha-airlock are recorded here. The format follows
 - The audit log (`internal/audit`): append-only JSON lines chained by
   SHA-256, and `ha-airlock audit verify FILE` to check a log. Nothing
   records into it yet. See `docs/audit-log.md`.
+- `internal/hacore`: a client for Core's WebSocket API, and a fourth check
+  of `ha-airlock probe` that reports which Home Assistant user the
+  Supervisor proxy acts as.
 
 ### Changed
 
 - The minimum Go version is 1.27.4, which fixes GO-2026-6859 in `net/http`.
+- New dependency: `github.com/gorilla/websocket` v1.5.3 (BSD-2-Clause, no
+  dependencies of its own), for Core's WebSocket API. The first module
+  besides the standard library.

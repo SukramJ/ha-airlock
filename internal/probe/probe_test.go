@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SukramJ/ha-airlock/internal/hacore/hacoretest"
 	"github.com/SukramJ/ha-airlock/internal/probe"
 )
 
@@ -55,8 +56,9 @@ func (c *fakeCore) port(t *testing.T) int {
 	return port
 }
 
-// fakeSupervisor serves /core/info and the proxied /core/api/config, and
-// refuses every request that does not carry the App's token.
+// fakeSupervisor serves /core/info, the proxied /core/api/config and the
+// proxied WebSocket, and refuses every request that does not carry the
+// App's token.
 func fakeSupervisor(t *testing.T, infoStatus, proxyStatus, corePort int) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -73,6 +75,9 @@ func fakeSupervisor(t *testing.T, infoStatus, proxyStatus, corePort int) *httpte
 	mux.HandleFunc("/core/info", guard(infoStatus,
 		fmt.Sprintf(`{"result":"ok","data":{"port":%d,"ssl":false}}`, corePort)))
 	mux.HandleFunc("/core/api/config", guard(proxyStatus, `{}`))
+	mux.Handle("/core/websocket", hacoretest.Handler(testToken, map[string]string{
+		"auth/current_user": `{"id":"abc","name":"Supervisor","is_admin":true,"is_owner":false}`,
+	}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -110,9 +115,28 @@ func TestRunReportsEveryWayOpen(t *testing.T) {
 	if !report.OK() {
 		t.Fatalf("report not OK: %+v", report.Results)
 	}
-	if len(report.Results) != 3 {
-		t.Fatalf("got %d results, want 3: %+v", len(report.Results), report.Results)
+	if len(report.Results) != 4 {
+		t.Fatalf("got %d results, want 4: %+v", len(report.Results), report.Results)
 	}
+}
+
+func TestRunReportsTheUserTheProxyActsAs(t *testing.T) {
+	t.Parallel()
+	core := newFakeCore(t)
+	sup := fakeSupervisor(t, http.StatusOK, http.StatusOK, core.port(t))
+
+	report := run(t, sup.URL)
+
+	for _, res := range report.Results {
+		if res.Check != probe.CheckProxyIdentity {
+			continue
+		}
+		if res.Outcome != probe.OutcomeOK || res.Detail != `user "Supervisor", admin true, owner false` {
+			t.Fatalf("identity check = %+v", res)
+		}
+		return
+	}
+	t.Fatal("no identity check in the report")
 }
 
 func TestRunNeverSendsTheSupervisorTokenToCore(t *testing.T) {
