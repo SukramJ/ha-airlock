@@ -15,7 +15,7 @@ concurrency:
 
 env:
   CGO_ENABLED: "0"
-  GO_VERSION: "1.27.3"
+  GO_VERSION: "1.27.4"
   # The lint tools are pinned on purpose, and pinned to the same versions the
   # sibling repositories use. A new lint release adds checks that are style
   # decisions, and floating on @latest makes this gate report on the calendar

@@ -20,3 +20,7 @@ All notable changes to ha-airlock are recorded here. The format follows
   (`config.yaml`, `Dockerfile`): run inside the App container, it reports
   whether Core is reachable through the Supervisor proxy and directly. It
   only reads.
+
+### Changed
+
+- The minimum Go version is 1.27.4, which fixes GO-2026-6859 in `net/http`.

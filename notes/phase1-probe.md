@@ -56,3 +56,16 @@ App is the only write, and the owner performs it.
 - Direct check `unexpected` with a TLS detail: Core serves HTTPS under a
   certificate that does not name `homeassistant`. A finding, not a failure
   of the probe.
+
+## What was checked before the first installation
+
+- The image builds from the `Dockerfile` (Docker 29.5.2, arm64) and is
+  3.4 MB; it runs as `nonroot`.
+- Without `SUPERVISOR_TOKEN` the container logs the reason and exits with
+  status 2. With a token and no Supervisor in reach, the two Supervisor
+  checks are `unreachable`, the direct check is `not performable`, and it
+  exits with status 1.
+- `config.yaml`: every key and value was read against the Supervisor's
+  schema (`supervisor/apps/validate.py:459-469`, `:523-525`; slug pattern
+  `supervisor/apps/const.py:58`). The schema itself was not executed on the
+  file, so acceptance by the Supervisor is still shown only by installing.

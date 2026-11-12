@@ -298,6 +298,8 @@ Assistant OS / Supervised).
   MCP SDK" (section 7) is this set, not one module.
 - Licence: Apache-2.0 for new contributions, MIT for existing code
   (`README.md:170`).
+- It builds without CGo: `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build`
+  over `mcp`, `auth`, `oauthex` and `jsonrpc` ended with exit status 0.
 
 - *Provisioning a user without code inside Core.* An admin connection can
   create a user (`config/auth/create`, `config/auth.py:84-102`) and give it
@@ -336,8 +338,6 @@ Assistant OS / Supervised).
   direct reachability of the first item.
 - The payload of the notification-action event. The companion app builds
   it, and its source was not read.
-- That the Go MCP SDK builds with `CGO_ENABLED=0`. A grep for `import "C"`
-  found nothing, without a control that it would have.
 - Which authorization server the remote listener uses. The SDK does not
   provide one, and the specification revision in force was read only as a
   draft page.
