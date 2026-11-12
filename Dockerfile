@@ -6,12 +6,13 @@
 FROM golang:1.27.4-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+COPY vendor ./vendor
 COPY cmd ./cmd
 COPY internal ./internal
 ARG BUILD_VERSION=0.0.0-dev
 ENV CGO_ENABLED=0
-RUN go build -trimpath \
+# Dependencies come from vendor/; the build fetches nothing.
+RUN go build -mod=vendor -trimpath \
       -ldflags="-s -w -X github.com/SukramJ/ha-airlock/internal/build.Version=${BUILD_VERSION}" \
       -o /out/ha-airlock ./cmd/ha-airlock
 
