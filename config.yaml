@@ -1,19 +1,20 @@
 # Home Assistant App configuration, read by the Supervisor.
 #
-# This is the reachability probe: the container runs "ha-airlock probe"
-# once, writes what it measured to the App log and exits. It only reads.
+# At this stage the container runs "ha-airlock provision" once and exits:
+# it gives ha-airlock its own Home Assistant user on the first start and
+# checks the stored credential on every later one.
 name: ha-airlock
 version: "0.0.0-dev"
 slug: ha_airlock
-description: MCP gateway for Home Assistant. This build only probes which ways to Core are open.
+description: MCP gateway for Home Assistant. This build only creates its own Home Assistant user; it serves no tools yet.
 url: https://github.com/SukramJ/ha-airlock
 arch:
   - aarch64
   - amd64
 startup: once
 boot: manual
-# hassio_api lets the probe ask the Supervisor where Core listens; the
+# hassio_api lets ha-airlock ask the Supervisor where Core listens; the
 # default role covers that. homeassistant_api opens the Supervisor's proxy
-# to Core, which is one of the two ways the probe measures.
+# to Core, which is used once, to create ha-airlock's own user.
 hassio_api: true
 homeassistant_api: true

@@ -17,6 +17,8 @@ import (
 
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/hacore/hacoretest"
+	"github.com/SukramJ/ha-airlock/internal/provision"
+	"github.com/SukramJ/ha-airlock/internal/provision/provisiontest"
 )
 
 func TestRunWithoutArgumentsPrintsTheVersion(t *testing.T) {
@@ -165,5 +167,80 @@ func TestAuditCommandRejectsAWrongInvocation(t *testing.T) {
 
 	if code := run(context.Background(), []string{"audit", "verify"}, environment{}, &out); code != exitUsage {
 		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+}
+
+// The provision command, built the way main builds it, creates the user,
+// keeps a credential in the data directory and leaves an audit log that
+// verifies and starts with the provisioning.
+func TestProvisionCommandCreatesTheUserAndRecordsIt(t *testing.T) {
+	t.Parallel()
+	home := provisiontest.NewHome(t)
+	dataDir := t.TempDir()
+	env := environment{
+		supervisorURL:   home.Supervisor.URL,
+		supervisorToken: provisiontest.SupervisorToken,
+		coreHost:        "127.0.0.1",
+		dataDir:         dataDir,
+	}
+	var out bytes.Buffer
+
+	code := run(context.Background(), []string{"provision"}, env, &out)
+
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want %d; log:\n%s", code, exitOK, out.String())
+	}
+	if !strings.Contains(out.String(), "created=true") {
+		t.Fatalf("log does not report the creation:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "core-credential.json")); err != nil {
+		t.Fatalf("credential file: %v", err)
+	}
+	summary, err := audit.VerifyFile(filepath.Join(dataDir, "audit.jsonl"))
+	if err != nil || summary.Records != 1 {
+		t.Fatalf("audit log: %+v, %v", summary, err)
+	}
+	for _, secret := range []string{provisiontest.SupervisorToken, provisiontest.RefreshToken, provisiontest.AccessToken} {
+		if strings.Contains(out.String(), secret) {
+			t.Fatal("the log contains a token")
+		}
+	}
+
+	// A second run finds the credential and creates nothing.
+	out.Reset()
+	if code := run(context.Background(), []string{"provision"}, env, &out); code != exitOK {
+		t.Fatalf("second run: exit code = %d; log:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "created=false") {
+		t.Fatalf("second run does not report reuse:\n%s", out.String())
+	}
+	home.Mu.Lock()
+	defer home.Mu.Unlock()
+	if len(home.Created) != 1 {
+		t.Fatalf("users created: %v", home.Created)
+	}
+}
+
+func TestProvisionCommandStopsAtAUserItDidNotCreate(t *testing.T) {
+	t.Parallel()
+	home := provisiontest.NewHome(t)
+	home.ExistingUsers = []string{provision.Username}
+	env := environment{
+		supervisorURL:   home.Supervisor.URL,
+		supervisorToken: provisiontest.SupervisorToken,
+		coreHost:        "127.0.0.1",
+		dataDir:         t.TempDir(),
+	}
+	var out bytes.Buffer
+
+	code := run(context.Background(), []string{"provision"}, env, &out)
+
+	if code != exitFailed {
+		t.Fatalf("exit code = %d, want %d; log:\n%s", code, exitFailed, out.String())
+	}
+	home.Mu.Lock()
+	defer home.Mu.Unlock()
+	if len(home.Created) != 0 {
+		t.Fatalf("users created: %v", home.Created)
 	}
 }

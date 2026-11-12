@@ -4,8 +4,9 @@
 // Command ha-airlock is the MCP server and the composition root of the
 // module. So far it reports its version, measures as "ha-airlock probe" from
 // inside the App container which ways to Home Assistant Core are open, and
-// checks an audit log as "ha-airlock audit verify FILE"; CONCEPT.md describes
-// what it is meant to become.
+// checks an audit log as "ha-airlock audit verify FILE" and, as "ha-airlock
+// provision", gives itself a Home Assistant user; CONCEPT.md describes what
+// it is meant to become.
 package main
 
 import (
@@ -15,12 +16,16 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/build"
 	"github.com/SukramJ/ha-airlock/internal/probe"
+	"github.com/SukramJ/ha-airlock/internal/provision"
+	"github.com/SukramJ/ha-airlock/internal/supervisor"
 )
 
 // environment is what the process takes from its surroundings. The names
@@ -30,6 +35,9 @@ type environment struct {
 	supervisorURL   string
 	supervisorToken string
 	coreHost        string
+	// dataDir is the directory the Supervisor keeps for the App across
+	// restarts and updates.
+	dataDir string
 }
 
 const (
@@ -44,6 +52,7 @@ func main() {
 		supervisorURL:   "http://supervisor",
 		supervisorToken: os.Getenv("SUPERVISOR_TOKEN"),
 		coreHost:        "homeassistant",
+		dataDir:         "/data",
 	}
 	code := run(ctx, os.Args[1:], env, os.Stdout)
 	stop()
@@ -64,6 +73,8 @@ func run(ctx context.Context, args []string, env environment, stdout io.Writer) 
 	switch args[0] {
 	case "probe":
 		return runProbe(ctx, env, logger)
+	case "provision":
+		return runProvision(ctx, env, logger)
 	case "audit":
 		return runAudit(ctx, args[1:], stdout, logger)
 	default:
@@ -108,5 +119,42 @@ func runAudit(ctx context.Context, args []string, stdout io.Writer, logger *slog
 	if _, err := fmt.Fprintf(stdout, "ok: %d records, head %s\n", summary.Records, summary.Head); err != nil {
 		return exitFailed
 	}
+	return exitOK
+}
+
+// runProvision handles "provision": it makes sure ha-airlock has its own
+// Home Assistant user and a credential for it, and records a creation in
+// the audit log.
+func runProvision(ctx context.Context, env environment, logger *slog.Logger) int {
+	if env.supervisorToken == "" {
+		logger.ErrorContext(ctx, "SUPERVISOR_TOKEN is not set; provisioning runs inside the App container")
+		return exitUsage
+	}
+	coreURL, err := supervisor.CoreURL(ctx, env.supervisorURL, env.supervisorToken, env.coreHost)
+	if err != nil {
+		logger.ErrorContext(ctx, "cannot learn where Core listens", slog.Any("error", err))
+		return exitFailed
+	}
+	auditLog, err := audit.Open(filepath.Join(env.dataDir, "audit.jsonl"))
+	if err != nil {
+		logger.ErrorContext(ctx, "cannot open the audit log", slog.Any("error", err))
+		return exitFailed
+	}
+	defer func() { _ = auditLog.Close() }()
+
+	cred, created, err := provision.Ensure(ctx, provision.Config{
+		ProxyURL:        "ws" + strings.TrimPrefix(env.supervisorURL, "http") + "/core/websocket",
+		SupervisorToken: env.supervisorToken,
+		CoreURL:         coreURL,
+		CredentialPath:  filepath.Join(env.dataDir, "core-credential.json"),
+		Audit:           auditLog,
+		Logger:          logger,
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "provisioning failed", slog.Any("error", err))
+		return exitFailed
+	}
+	logger.InfoContext(ctx, "home assistant user is ready",
+		slog.String("user_id", cred.UserID), slog.Bool("created", created))
 	return exitOK
 }

@@ -25,11 +25,12 @@ Assistant App: one container beside Core.
 - **Language**: Go 1.27+ · module `github.com/SukramJ/ha-airlock`
 - **License**: Apache-2.0; contributions come under [`CLA.md`](./CLA.md).
 - **Deployment**: one static binary (`CGO_ENABLED=0`). No CGo.
-- **State of the code**: `cmd/ha-airlock` prints its version, runs the
-  reachability probe (`ha-airlock probe`, `notes/phase1-probe.md`) and
-  verifies an audit log (`ha-airlock audit verify`). The audit log exists as
-  a package (`internal/audit`); nothing records into it yet, and nothing of
-  the tool chain is implemented.
+- **State of the code**: `cmd/ha-airlock` has four commands: no argument
+  prints the version, `probe` measures the ways to Core
+  (`notes/phase1-probe.md`), `audit verify` checks an audit log, and
+  `provision` gives ha-airlock its own Home Assistant user and records
+  that in the audit log — this is what the App's container runs. No MCP
+  server and no tool exist yet.
 
 Every tool call passes one chain, in this order:
 
@@ -188,6 +189,8 @@ ha-airlock/
 │   ├── build/           — version
 │   ├── hacore/          — client for Core's WebSocket API (hacoretest: its stand-in for tests)
 │   ├── probe/           — reachability probe (Supervisor proxy and its identity, Core directly)
+│   ├── provision/       — the App's own Core user: creation, credential (provisiontest: stand-in Home Assistant)
+│   ├── supervisor/      — what the Supervisor tells the App (Core's address)
 │   └── repoguard/       — repository-wide guards (licence header)
 ├── docs/                — PUBLISHED documentation only
 └── notes/               — engineering working docs, NEVER published
