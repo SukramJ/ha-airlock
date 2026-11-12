@@ -296,3 +296,30 @@ func TestVerifyOfAnEmptyLogReportsNoRecords(t *testing.T) {
 		t.Fatalf("records = %d, want 0", summary.Records)
 	}
 }
+
+// An entry the log could not read back must not be written: one oversized
+// line would make the whole log fail its own check.
+func TestAppendRejectsAnEntryTooLargeToReadBack(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	log, err := audit.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+
+	_, err = log.Append(context.Background(), audit.Entry{Event: "tool_call", Result: strings.Repeat("x", 5<<20)})
+	if !errors.Is(err, audit.ErrTooLarge) {
+		t.Fatalf("append error = %v, want ErrTooLarge", err)
+	}
+	if _, err := log.Append(context.Background(), audit.Entry{Event: "tool_call", Result: strings.Repeat("x", 3<<20)}); err != nil {
+		t.Fatalf("append of a large entry within the limit: %v", err)
+	}
+	summary, err := audit.VerifyFile(path)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if summary.Records != 1 {
+		t.Fatalf("records = %d, want 1", summary.Records)
+	}
+}

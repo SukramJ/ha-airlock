@@ -26,6 +26,10 @@ check, which exist.
 The file is created readable and writable by its owner only, and every line
 is flushed to stable storage before the append returns.
 
+An entry larger than about 4 MB encoded is refused rather than written:
+the check reads lines up to that size, and a longer one would make the
+whole log fail it.
+
 ## Checking a log
 
 ```sh

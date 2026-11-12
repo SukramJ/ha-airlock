@@ -35,6 +35,14 @@ const genesis = "000000000000000000000000000000000000000000000000000000000000000
 // maxLine bounds one line of the log when reading it back.
 const maxLine = 4 << 20
 
+// maxEntry bounds an encoded entry when appending, so that every line the
+// log writes is one it can read back: the hash, the keys and the newline
+// around the entry stay well below the difference to maxLine.
+const maxEntry = maxLine - 1024
+
+// ErrTooLarge reports an entry that would not fit a line of the log.
+var ErrTooLarge = errors.New("audit entry is too large")
+
 // ErrBroken is wrapped by every error that reports a log whose chain does
 // not hold.
 var ErrBroken = errors.New("audit log is broken")
@@ -132,10 +140,13 @@ func (l *Log) Append(ctx context.Context, entry Entry) (Receipt, error) {
 	if err != nil {
 		return Receipt{}, fmt.Errorf("encode audit entry: %w", err)
 	}
+	if len(body) > maxEntry {
+		return Receipt{}, fmt.Errorf("%w: %d bytes encoded", ErrTooLarge, len(body))
+	}
 	hash := hashOf(body)
 	// The line is assembled by hand so that the entry's bytes reach the file
 	// exactly as they were hashed.
-	out := make([]byte, 0, len(body)+len(hash)+24)
+	var out []byte
 	out = append(out, `{"hash":"`...)
 	out = append(out, hash...)
 	out = append(out, `","entry":`...)
