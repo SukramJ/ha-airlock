@@ -541,6 +541,7 @@ func TestActionRunsOnlyAfterApprovalInTheSidebar(t *testing.T) {
 	r := startServer(t, `{"public_url":"`+publicURL+`"}`)
 	r.home.Mu.Lock()
 	r.home.CoreResults["config/entity_registry/get"] = `{"labels":["airlock"],"name":"Desk <lamp>","original_name":null}`
+	r.home.CoreResults["get_states"] = `[{"entity_id":"light.other","state":"on"},{"entity_id":"light.desk","state":"off"}]`
 	r.home.Mu.Unlock()
 	accessToken := r.authorize(t, "local")
 	args := map[string]string{"entity_id": "light.desk"}
@@ -599,7 +600,8 @@ func TestActionRunsOnlyAfterApprovalInTheSidebar(t *testing.T) {
 	shown := r.asAdmin(t, http.MethodGet, "/", nil).body
 	id := actionIDRE.FindStringSubmatch(shown)
 	token := formTokenRE.FindStringSubmatch(shown)
-	if id == nil || token == nil || !strings.Contains(shown, "Turn on light.desk") || !strings.Contains(shown, "Desk &lt;lamp&gt;") {
+	if id == nil || token == nil || !strings.Contains(shown, "Turn on light.desk") || !strings.Contains(shown, "Desk &lt;lamp&gt;") ||
+		!strings.Contains(shown, "<dt>State now</dt><dd>off</dd>") {
 		t.Fatalf("the sidebar page does not show the waiting action:\n%s", shown)
 	}
 	if got := r.asAdmin(t, http.MethodPost, "/action", url.Values{"csrf": {token[1]}, "id": {id[1]}, "action": {"approve"}}); got.status != http.StatusOK {

@@ -35,6 +35,8 @@ approval** you see one box per call:
 - the action in one line, for example "Turn on light.desk" — written by
   ha-airlock from the call, not by the application;
 - the entity's id and the name Home Assistant shows for it;
+- the state the entity is in at the moment you look, or "not known" if
+  Home Assistant did not say — the page can be reloaded;
 - the application that asks, and the tool and arguments it sent.
 
 **Approve** lets exactly this call run once, when the application repeats
