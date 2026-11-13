@@ -35,6 +35,42 @@ import (
 // toolTimeout bounds one tool's work in Home Assistant.
 const toolTimeout = 30 * time.Second
 
+// sweepEvery is how often expired approvals are looked for.
+const sweepEvery = 20 * time.Second
+
+// approvalNoticeID is the one notification ha-airlock keeps in Home
+// Assistant while an approval is waiting.
+const approvalNoticeID = "ha_airlock_approval"
+
+// approvalNotice returns what tells the owner, in Home Assistant, that an
+// approval is waiting, and takes the notice away when none is. The notice
+// names neither the action nor the application, and carries no button: an
+// approval is given in the ha-airlock page and nowhere else.
+func approvalNotice(core catalog.Core, logger *slog.Logger) approval.Notify {
+	type call struct {
+		Domain      string            `json:"domain"`
+		Service     string            `json:"service"`
+		ServiceData map[string]string `json:"service_data"`
+	}
+	return func(ctx context.Context, waiting bool) {
+		// The notice is sent even if the request that caused it has ended.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		c := call{Domain: "persistent_notification", Service: "dismiss", ServiceData: map[string]string{"notification_id": approvalNoticeID}}
+		if waiting {
+			c.Service = "create"
+			c.ServiceData["title"] = "ha-airlock"
+			c.ServiceData["message"] = "An action is waiting for your approval. Open ha-airlock in Home Assistant to see it."
+		}
+		var answer json.RawMessage
+		if err := core.Call(ctx, "call_service", c, &answer); err != nil {
+			// Without the notice the request still waits in the page.
+			logger.WarnContext(ctx, "the approval notice could not be updated in home assistant",
+				slog.Bool("waiting", waiting), slog.Any("error", err))
+		}
+	}
+}
+
 // options are what the owner sets in the App's configuration.
 type options struct {
 	// PublicURL is the HTTPS address under which the owner's reverse proxy
@@ -117,6 +153,8 @@ type app struct {
 	ingress http.Handler
 	// public is nil when no usable public URL is configured.
 	public http.Handler
+	// sweep lets what has expired be noticed while nothing else happens.
+	sweep func(context.Context)
 }
 
 func (a *app) close() { _ = a.audit.Close() }
@@ -166,7 +204,9 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	if err != nil {
 		return nil, err
 	}
-	approvals := approval.New(auditLog)
+	core := provision.NewCore(coreURL, cred)
+	approvals := approval.New(auditLog, approvalNotice(core, logger))
+	a.sweep = approvals.Sweep
 	consent, err := oauth.NewConsent(store, killSwitch, auditLog, approvals, logger)
 	if err != nil {
 		return nil, err
@@ -194,7 +234,7 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 
 	tools := catalog.All()
 	g := gate.New(gate.Config{
-		Policy: pol, Audit: auditLog, Core: provision.NewCore(coreURL, cred), Tools: tools,
+		Policy: pol, Audit: auditLog, Core: core, Tools: tools,
 		Timeout: toolTimeout, Halted: killSwitch.Engaged, Approvals: approvals,
 	})
 	authz := oauth.NewServer(store, env.clientMetadata, opts.PublicURL, logger)
@@ -247,6 +287,19 @@ func (a *app) serve(ctx context.Context, env environment) error {
 	if env.onListening != nil {
 		env.onListening(addrs)
 	}
+	// The sweeper ends with ctx.
+	wg.Go(func() {
+		ticker := time.NewTicker(sweepEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.sweep(ctx)
+			}
+		}
+	})
 
 	var failure error
 	select {
