@@ -29,9 +29,12 @@ Assistant App: one container beside Core.
   App's container runs: it provisions its own Home Assistant user, serves
   the consent page through Ingress and, behind the owner's HTTPS reverse
   proxy, the OAuth 2.1 authorization server and the MCP endpoint. Every
-  tool call passes `internal/gate`. The catalogue holds five read-only tools (R0);
-  `docs/tools.md` is generated from it. The sidebar page shows the audit
-  log. Not built: approval of actions, any tier above R0. Other
+  tool call passes `internal/gate`. The catalogue holds five read-only tools (R0)
+  and six control tools (R1); `docs/tools.md` is generated from it. R1
+  acts only on entities carrying the owner's label and, by default, after
+  an approval in the sidebar page (ADR 0005). The sidebar page shows the
+  audit log. Not built: the notice that an approval waits, any tier above
+  R1. Other
   commands: `probe`, `provision`, `audit verify`.
 
 Every tool call passes one chain, in this order:
@@ -187,6 +190,7 @@ ha-airlock/
 ├── config.yaml  Dockerfile  repository.yaml  — the Home Assistant App: Supervisor config, image, App repository
 ├── cmd/ha-airlock/      — the server (composition root)
 ├── internal/
+│   ├── approval/        — tool calls waiting for an administrator: bound to client, tool and arguments, single use
 │   ├── audit/           — the audit log: hash-chained JSON lines, verification
 │   ├── build/           — version
 │   ├── catalog/         — the static tool catalogue: every tool, its tier, its endpoints

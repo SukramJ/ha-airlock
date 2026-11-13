@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/SukramJ/ha-airlock/internal/catalog"
 )
@@ -26,7 +27,17 @@ const (
 	Allow Decision = "allow"
 	// Deny refuses it.
 	Deny Decision = "deny"
+	// Approval lets the call run once an administrator approved exactly
+	// this call in the sidebar page.
+	Approval Decision = "approval"
 )
+
+// defaultControlLabel is the Home Assistant label that releases an entity
+// for control when the policy file names none.
+const defaultControlLabel = "airlock"
+
+// labelShape is the shape of a label id as Home Assistant generates it.
+var labelShape = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 
 // The profiles a client can be given.
 const (
@@ -49,6 +60,7 @@ const (
 type Policy struct {
 	profiles map[string]map[catalog.Tier]Decision
 	limits   map[string]int
+	label    string
 }
 
 func defaultLimits() map[string]int {
@@ -56,15 +68,17 @@ func defaultLimits() map[string]int {
 }
 
 // Default is the policy in force when the owner has written none: the local
-// profile may read and diagnose, and nothing else is allowed. The remote
-// profile is denied everything until its stricter redaction exists.
+// profile may read and diagnose, and may control released entities after an
+// approval for each call. Nothing else is allowed. The remote profile is
+// denied everything until its stricter redaction exists.
 func Default() Policy {
 	return Policy{
 		profiles: map[string]map[catalog.Tier]Decision{
-			ProfileLocal:  {catalog.R0: Allow},
+			ProfileLocal:  {catalog.R0: Allow, catalog.R1: Approval},
 			ProfileRemote: {},
 		},
 		limits: defaultLimits(),
+		label:  defaultControlLabel,
 	}
 }
 
@@ -73,6 +87,9 @@ type file struct {
 	Version  int                          `json:"version"`
 	Profiles map[string]map[string]string `json:"profiles"`
 	Limits   map[string]limit             `json:"limits"`
+	// ControlLabel is the id of the Home Assistant label that releases an
+	// entity for control.
+	ControlLabel *string `json:"control_label"`
 }
 
 // limit is what the file may say about one profile's quantity limits.
@@ -101,7 +118,13 @@ func Parse(data []byte) (Policy, error) {
 	for _, tier := range catalog.Tiers() {
 		known[tier] = true
 	}
-	p := Policy{profiles: map[string]map[catalog.Tier]Decision{}, limits: defaultLimits()}
+	p := Policy{profiles: map[string]map[catalog.Tier]Decision{}, limits: defaultLimits(), label: defaultControlLabel}
+	if f.ControlLabel != nil {
+		if !labelShape.MatchString(*f.ControlLabel) {
+			return Policy{}, errors.New("policy: control_label must be a label id of lower-case letters, digits and underscores")
+		}
+		p.label = *f.ControlLabel
+	}
 	for profile, l := range f.Limits {
 		if profile != ProfileLocal && profile != ProfileRemote {
 			return Policy{}, fmt.Errorf("policy: limits: unknown profile %q", profile)
@@ -121,7 +144,7 @@ func Parse(data []byte) (Policy, error) {
 				return Policy{}, fmt.Errorf("policy: profile %q: unknown tier %q", profile, tier)
 			}
 			switch Decision(decision) {
-			case Allow, Deny:
+			case Allow, Deny, Approval:
 				p.profiles[profile][catalog.Tier(tier)] = Decision(decision)
 			default:
 				return Policy{}, fmt.Errorf("policy: profile %q, tier %s: unknown decision %q", profile, tier, decision)
@@ -134,11 +157,17 @@ func Parse(data []byte) (Policy, error) {
 // Decide returns the decision for a profile and a tier. A profile or a tier
 // the policy does not mention is denied.
 func (p Policy) Decide(profile string, tier catalog.Tier) Decision {
-	if p.profiles[profile][tier] == Allow {
-		return Allow
+	switch d := p.profiles[profile][tier]; d {
+	case Allow, Approval:
+		return d
+	default:
+		return Deny
 	}
-	return Deny
 }
+
+// ControlLabel returns the id of the Home Assistant label an entity must
+// carry for a tool to act on it.
+func (p Policy) ControlLabel() string { return p.label }
 
 // CallsPerMinute returns how many tool calls a client of the profile may
 // make per minute. A profile the policy does not know gets the stricter of

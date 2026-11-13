@@ -6,6 +6,7 @@ package oauth_test
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/oauth"
 	"github.com/SukramJ/ha-airlock/internal/policy"
@@ -38,6 +40,7 @@ type web struct {
 	server  *oauth.Server
 	client  *http.Client
 	halt    *fakeSwitch
+	actions *approval.Store
 }
 
 // fakeSwitch is a kill switch that remembers who operated it.
@@ -66,7 +69,8 @@ func newWeb(t *testing.T) *web {
 	w.server.Register(publicMux)
 
 	w.halt = &fakeSwitch{}
-	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, logger)
+	w.actions = approval.New(w.auditLog)
+	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, w.actions, logger)
 	if err != nil {
 		t.Fatalf("consent: %v", err)
 	}
@@ -584,5 +588,113 @@ func TestAuditPageSaysWhenTheLogIsNotIntact(t *testing.T) {
 	}
 	if !strings.Contains(body, "client_approved") || strings.Contains(body, "last_tool") {
 		t.Fatalf("the page does not show exactly the records that are left:\n%s", body)
+	}
+}
+
+// park puts one action before the owner and returns it.
+func (w *web) park(t *testing.T, client, name string) approval.Request {
+	t.Helper()
+	args := json.RawMessage(`{"entity_id":"light.kitchen"}`)
+	key, err := approval.Key(client, "light_turn_on", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &approval.Request{
+		Key: key, Client: client, Tool: "light_turn_on", Summary: "Turn on light.kitchen", Arguments: args,
+		Entities: []approval.Entity{{ID: "light.kitchen", Name: name}},
+	}
+	if status, _, err := w.actions.Resolve(context.Background(), req); err != nil || status != approval.Waiting {
+		t.Fatalf("park: status %d, %v", status, err)
+	}
+	pending := w.actions.Pending()
+	for i := range pending {
+		if pending[i].Key == key {
+			return pending[i]
+		}
+	}
+	t.Fatal("the parked action is not pending")
+	return approval.Request{}
+}
+
+func (w *web) status(t *testing.T, r approval.Request) approval.Status {
+	t.Helper()
+	status, _, err := w.actions.Resolve(context.Background(), &r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+func TestWaitingActionIsShownAndApprovedOnThePageByAnAdministrator(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	w.tokens(t, policy.ProfileLocal)
+	parked := w.park(t, clientID, `Kitchen <b>ceiling</b>`)
+
+	_, body := w.asAdmin(t, http.MethodGet, "/", nil)
+	for _, want := range []string{
+		"Turn on light.kitchen", "light.kitchen — Kitchen &lt;b&gt;ceiling&lt;/b&gt;", html.EscapeString(w.store.Grants()[0].ClientName) + " (", "light_turn_on",
+		`name="id" value="` + parked.ID + `"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "<b>ceiling") || strings.Contains(body, parked.Key) {
+		t.Fatalf("the page shows the entity name as markup, or the key:\n%s", body)
+	}
+
+	resp, body := w.asAdmin(t, http.MethodPost, "/action", url.Values{"csrf": {w.csrf(t)}, "id": {parked.ID}, "action": {"approve"}})
+	if resp.status != http.StatusOK || !strings.Contains(body, "Approved. The action runs") || !strings.Contains(body, "No action is waiting") {
+		t.Fatalf("approve: %d\n%s", resp.status, body)
+	}
+	if got := w.status(t, parked); got != approval.Approved {
+		t.Fatalf("status after approval = %d", got)
+	}
+	if audited := w.auditText(t); !strings.Contains(audited, `"event":"action_approved"`) || !strings.Contains(audited, `"approver":"`+admin+`"`) {
+		t.Fatalf("audit log:\n%s", audited)
+	}
+}
+
+func TestActionIsDeniedOnThePage(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	parked := w.park(t, clientID, "")
+
+	resp, body := w.asAdmin(t, http.MethodPost, "/action", url.Values{"csrf": {w.csrf(t)}, "id": {parked.ID}, "action": {"deny"}})
+
+	if resp.status != http.StatusOK || !strings.Contains(body, "Denied. The action does not run") {
+		t.Fatalf("deny: %d\n%s", resp.status, body)
+	}
+	if got := w.status(t, parked); got != approval.Denied {
+		t.Fatalf("status after denial = %d", got)
+	}
+	// Anything but the word approve is a denial, and a request is decided once.
+	_, body = w.asAdmin(t, http.MethodPost, "/action", url.Values{"csrf": {w.csrf(t)}, "id": {parked.ID}, "action": {"approve"}})
+	if !strings.Contains(body, "expired or was already decided") || w.status(t, parked) != approval.Denied {
+		t.Fatalf("a decided action was decided again:\n%s", body)
+	}
+}
+
+func TestActionIsDecidedOnlyByAnAdministratorThroughThePagesOwnForm(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	parked := w.park(t, clientID, "")
+	token := w.csrf(t)
+	form := func(csrf string) url.Values {
+		return url.Values{"csrf": {csrf}, "id": {parked.ID}, "action": {"approve"}}
+	}
+
+	if resp, _ := w.consentRequest(t, http.MethodPost, "/action", form(token), "some-user", "system-users"); resp.status != http.StatusForbidden {
+		t.Errorf("non-administrator: status %d, want 403", resp.status)
+	}
+	if resp, _ := w.consentRequest(t, http.MethodPost, "/action", form(token), "", ""); resp.status != http.StatusForbidden {
+		t.Errorf("nobody: status %d, want 403", resp.status)
+	}
+	if resp, _ := w.asAdmin(t, http.MethodPost, "/action", form("not-the-token")); resp.status != http.StatusForbidden {
+		t.Errorf("forged form: status %d, want 403", resp.status)
+	}
+	if got := w.status(t, parked); got != approval.Waiting {
+		t.Fatalf("the action was decided: status %d", got)
 	}
 }

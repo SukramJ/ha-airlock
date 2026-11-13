@@ -24,7 +24,9 @@ func writeToolsDoc(w io.Writer) error {
 	b.WriteString("at run time.\n\n")
 	b.WriteString("| Tool | Tier | What it does | Home Assistant endpoints |\n")
 	b.WriteString("| --- | --- | --- | --- |\n")
-	for _, tool := range catalog.All() {
+	tools := catalog.All()
+	for i := range tools {
+		tool := &tools[i]
 		endpoints := make([]string, 0, len(tool.Endpoints))
 		for _, e := range tool.Endpoints {
 			endpoints = append(endpoints, "`"+e+"`")

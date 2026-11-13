@@ -11,13 +11,20 @@ import (
 	"github.com/SukramJ/ha-airlock/internal/policy"
 )
 
-func TestDefaultAllowsTheLocalProfileToReadAndNothingElse(t *testing.T) {
+func TestDefaultLetsTheLocalProfileReadAndControlAfterApprovalAndNothingElse(t *testing.T) {
 	t.Parallel()
 	p := policy.Default()
+	if p.ControlLabel() != "airlock" {
+		t.Errorf("control label = %q, want airlock", p.ControlLabel())
+	}
 	for _, tier := range catalog.Tiers() {
 		want := policy.Deny
-		if tier == catalog.R0 {
+		switch tier {
+		case catalog.R0:
 			want = policy.Allow
+		case catalog.R1:
+			want = policy.Approval
+		case catalog.R2, catalog.R3, catalog.R4:
 		}
 		if got := p.Decide(policy.ProfileLocal, tier); got != want {
 			t.Errorf("local, %s = %s, want %s", tier, got, want)
@@ -62,17 +69,20 @@ func TestParseAppliesEachDecisionToEachTier(t *testing.T) {
 func TestParseRejectsWhatItDoesNotKnow(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"unknown key":                `{"version":1,"profiles":{},"never":[]}`,
-		"unknown profile":            `{"version":1,"profiles":{"admin":{"R0":"allow"}}}`,
-		"unknown tier":               `{"version":1,"profiles":{"local":{"R9":"allow"}}}`,
-		"misspelt tier":              `{"version":1,"profiles":{"local":{"r0":"allow"}}}`,
-		"unknown decision":           `{"version":1,"profiles":{"local":{"R1":"approval"}}}`,
-		"misspelt decision":          `{"version":1,"profiles":{"local":{"R0":"Allow"}}}`,
-		"missing version":            `{"profiles":{"local":{"R0":"allow"}}}`,
-		"other version":              `{"version":2,"profiles":{}}`,
-		"not JSON":                   `version: 1`,
-		"two values":                 `{"version":1,"profiles":{}} {"version":1,"profiles":{}}`,
-		"decision of the wrong type": `{"version":1,"profiles":{"local":{"R0":true}}}`,
+		"unknown key":                 `{"version":1,"profiles":{},"never":[]}`,
+		"unknown profile":             `{"version":1,"profiles":{"admin":{"R0":"allow"}}}`,
+		"unknown tier":                `{"version":1,"profiles":{"local":{"R9":"allow"}}}`,
+		"misspelt tier":               `{"version":1,"profiles":{"local":{"r0":"allow"}}}`,
+		"unknown decision":            `{"version":1,"profiles":{"local":{"R1":"ask"}}}`,
+		"empty control label":         `{"version":1,"profiles":{},"control_label":""}`,
+		"control label with a space":  `{"version":1,"profiles":{},"control_label":"my label"}`,
+		"control label of wrong type": `{"version":1,"profiles":{},"control_label":7}`,
+		"misspelt decision":           `{"version":1,"profiles":{"local":{"R0":"Allow"}}}`,
+		"missing version":             `{"profiles":{"local":{"R0":"allow"}}}`,
+		"other version":               `{"version":2,"profiles":{}}`,
+		"not JSON":                    `version: 1`,
+		"two values":                  `{"version":1,"profiles":{}} {"version":1,"profiles":{}}`,
+		"decision of the wrong type":  `{"version":1,"profiles":{"local":{"R0":true}}}`,
 	}
 	for name, text := range cases {
 		if _, err := policy.Parse([]byte(text)); err == nil {
@@ -110,5 +120,28 @@ func TestCallLimitsHaveDefaultsAndCanBeSet(t *testing.T) {
 		if _, err := policy.Parse([]byte(text)); err == nil {
 			t.Errorf("%s: accepted %s", name, text)
 		}
+	}
+}
+
+func TestParseReadsTheApprovalDecisionAndTheControlLabel(t *testing.T) {
+	t.Parallel()
+	p, err := policy.Parse([]byte(`{"version":1,"profiles":{"local":{"R0":"approval","R1":"allow"},"remote":{"R1":"approval"}},"control_label":"ai_may_switch"}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if p.Decide(policy.ProfileLocal, catalog.R0) != policy.Approval || p.Decide(policy.ProfileLocal, catalog.R1) != policy.Allow ||
+		p.Decide(policy.ProfileRemote, catalog.R1) != policy.Approval || p.Decide(policy.ProfileRemote, catalog.R0) != policy.Deny {
+		t.Fatal("the decisions are not the ones the file names")
+	}
+	if p.ControlLabel() != "ai_may_switch" {
+		t.Fatalf("control label = %q", p.ControlLabel())
+	}
+
+	plain, err := policy.Parse([]byte(`{"version":1,"profiles":{}}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if plain.ControlLabel() != "airlock" {
+		t.Fatalf("control label of a file that names none = %q, want airlock", plain.ControlLabel())
 	}
 }

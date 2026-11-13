@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/catalog"
 	"github.com/SukramJ/ha-airlock/internal/gate"
@@ -41,6 +42,12 @@ func (f *fakeCore) Call(_ context.Context, command string, _, out any) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, command)
 	f.mu.Unlock()
+	switch command {
+	case "config/entity_registry/get":
+		return json.Unmarshal([]byte(`{"labels":["airlock"],"name":null,"original_name":"Lamp"}`), out)
+	case "call_service":
+		return json.Unmarshal([]byte(`{"context":{"id":"01J"}}`), out)
+	}
 	return json.Unmarshal([]byte(`[{"name":"homeassistant.components.mqtt","level":"ERROR",
 		"message":["cannot connect to mqtt://user:hunter2pass@broker:1883"],"count":2}]`), out)
 }
@@ -49,6 +56,19 @@ func (f *fakeCore) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.calls)
+}
+
+// countOf returns how often one command was sent.
+func (f *fakeCore) countOf(command string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c == command {
+			n++
+		}
+	}
+	return n
 }
 
 // verify accepts the two test tokens.
@@ -67,6 +87,7 @@ type fixture struct {
 	url       string
 	core      *fakeCore
 	auditPath string
+	approvals *approval.Store
 }
 
 // newFixture builds the server from the real catalogue and serves it over
@@ -80,7 +101,10 @@ func newFixture(t *testing.T) fixture {
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	core := &fakeCore{}
-	g := gate.New(gate.Config{Policy: policy.Default(), Audit: log, Core: core, Tools: catalog.All(), Timeout: 5 * time.Second})
+	approvals := approval.New(log)
+	g := gate.New(gate.Config{
+		Policy: policy.Default(), Audit: log, Core: core, Tools: catalog.All(), Timeout: 5 * time.Second, Approvals: approvals,
+	})
 	server := mcpserver.New(g, catalog.All(), "test")
 	// The handler needs the host it is served under, which exists only once
 	// the test server listens.
@@ -88,7 +112,7 @@ func newFixture(t *testing.T) fixture {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	t.Cleanup(httpServer.Close)
 	handler = mcpserver.Handler(server, verify, metadataURL, strings.TrimPrefix(httpServer.URL, "http://"))
-	return fixture{url: httpServer.URL, core: core, auditPath: auditPath}
+	return fixture{url: httpServer.URL, core: core, auditPath: auditPath, approvals: approvals}
 }
 
 // bearer adds an access token to every request.
@@ -304,5 +328,35 @@ func TestRequestUnderAnotherHostNameIsRefused(t *testing.T) {
 	}
 	if f.core.count() != 0 {
 		t.Fatal("Home Assistant was reached under a foreign host name")
+	}
+}
+
+// A call the policy wants approved, over MCP: the client is told in plain
+// words that nothing ran, cannot approve anything itself, and gets the
+// result once an administrator approved.
+func TestCallWaitingForApprovalIsReportedAsNotRunAndRunsAfterTheApproval(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	session := connect(t, f, localToken)
+	args := map[string]any{"entity_id": "light.lamp"}
+
+	text, isError := call(t, session, "light_turn_on", args)
+	if isError || !strings.HasPrefix(text, "NOT RUN YET") || f.core.countOf("call_service") != 0 {
+		t.Fatalf("waiting call: isError = %t, %d service calls, %s", isError, f.core.countOf("call_service"), text)
+	}
+	pending := f.approvals.Pending()
+	if len(pending) != 1 || pending[0].Client != "client-local" || strings.Contains(text, pending[0].ID) {
+		t.Fatalf("pending = %+v; the text for the client must not name the request: %s", pending, text)
+	}
+	if err := f.approvals.Decide(context.Background(), pending[0].ID, true, "admin-1"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+
+	text, isError = call(t, session, "light_turn_on", args)
+	if isError || !strings.Contains(text, `"called":"light.turn_on"`) || f.core.countOf("call_service") != 1 {
+		t.Fatalf("call after approval: isError = %t, %d service calls, %s", isError, f.core.countOf("call_service"), text)
+	}
+	if audited := f.auditText(t); !strings.Contains(audited, `"event":"action_approved"`) || !strings.Contains(audited, `"approver":"admin-1"`) {
+		t.Fatalf("audit log:\n%s", audited)
 	}
 }

@@ -99,6 +99,8 @@ days.
   (`docs/audit-log.md`), with the client, the tool, the redacted
   arguments, the decision and a hash of the result. Approvals, denials and
   revocations are records too.
+- Switching something needs more than access: see
+  `docs/approving-actions.md`.
 - If a call cannot be recorded, its result is not returned.
 
 ## What ha-airlock connects to on the internet

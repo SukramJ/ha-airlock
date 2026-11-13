@@ -267,6 +267,11 @@ func (r *running) authorize(t *testing.T, profile string) string {
 
 func (r *running) callTool(t *testing.T, accessToken, name string) (text string, isError bool) {
 	t.Helper()
+	return r.callToolWith(t, accessToken, name, nil)
+}
+
+func (r *running) callToolWith(t *testing.T, accessToken, name string, args map[string]string) (text string, isError bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	client := mcp.NewClient(&mcp.Implementation{Name: "wiring-test", Version: "1"}, nil)
@@ -279,7 +284,11 @@ func (r *running) callTool(t *testing.T, accessToken, name string) (text string,
 		t.Fatalf("connect: %v", err)
 	}
 	defer func() { _ = session.Close() }()
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name})
+	params := &mcp.CallToolParams{Name: name}
+	if args != nil {
+		params.Arguments = args
+	}
+	result, err := session.CallTool(ctx, params)
 	if err != nil {
 		t.Fatalf("call %s: %v", name, err)
 	}
@@ -501,5 +510,97 @@ func TestAuditViewInTheSidebarShowsTheServedToolCall(t *testing.T) {
 	other := startServer(t, `{"public_url":"`+publicURL+`"}`, netip.MustParseAddr("172.30.32.2"))
 	if got := other.asAdmin(t, http.MethodGet, "/audit", nil); got.status != http.StatusForbidden {
 		t.Fatalf("audit view for a peer that is not the Supervisor: status %d, want 403", got.status)
+	}
+}
+
+var actionIDRE = regexp.MustCompile(`name="id" value="([0-9a-f]+)"`)
+
+// The approval of an action on the server as main builds it: the gate the
+// MCP endpoint calls and the page the Supervisor reaches share one store.
+// A call the default policy wants approved does not reach Home Assistant
+// until an administrator approved it in the sidebar page, and then once.
+func TestActionRunsOnlyAfterApprovalInTheSidebar(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`"}`)
+	r.home.Mu.Lock()
+	r.home.CoreResults["config/entity_registry/get"] = `{"labels":["airlock"],"name":"Desk <lamp>","original_name":null}`
+	r.home.Mu.Unlock()
+	accessToken := r.authorize(t, "local")
+	args := map[string]string{"entity_id": "light.desk"}
+	services := func() []string {
+		r.home.Mu.Lock()
+		defer r.home.Mu.Unlock()
+		var out []string
+		for _, s := range r.home.Services {
+			if strings.HasPrefix(s, "light.") {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+
+	text, isError := r.callToolWith(t, accessToken, "light_turn_on", args)
+	if isError || !strings.HasPrefix(text, "NOT RUN YET") || len(services()) != 0 {
+		t.Fatalf("call before the approval: isError = %t, services %v, %s", isError, services(), text)
+	}
+
+	shown := r.asAdmin(t, http.MethodGet, "/", nil).body
+	id := actionIDRE.FindStringSubmatch(shown)
+	token := formTokenRE.FindStringSubmatch(shown)
+	if id == nil || token == nil || !strings.Contains(shown, "Turn on light.desk") || !strings.Contains(shown, "Desk &lt;lamp&gt;") {
+		t.Fatalf("the sidebar page does not show the waiting action:\n%s", shown)
+	}
+	if got := r.asAdmin(t, http.MethodPost, "/action", url.Values{"csrf": {token[1]}, "id": {id[1]}, "action": {"approve"}}); got.status != http.StatusOK {
+		t.Fatalf("approve: status %d", got.status)
+	}
+
+	text, isError = r.callToolWith(t, accessToken, "light_turn_on", args)
+	if isError || !strings.Contains(text, `\"called\":\"light.turn_on\"`) && !strings.Contains(text, `"called":"light.turn_on"`) {
+		t.Fatalf("call after the approval: isError = %t, %s", isError, text)
+	}
+	if got := services(); len(got) != 1 || got[0] != "light.turn_on" {
+		t.Fatalf("services called = %v, want one light.turn_on", got)
+	}
+	if text, _ := r.callToolWith(t, accessToken, "light_turn_on", args); !strings.HasPrefix(text, "NOT RUN YET") || len(services()) != 1 {
+		t.Fatalf("the approval was used twice: %s", text)
+	}
+
+	audited := r.auditText(t)
+	for _, want := range []string{
+		`"decision":"approval"`, `"result":"waiting for approval"`, `"event":"action_approved"`, `"approver":"admin-user-id"`,
+	} {
+		if !strings.Contains(audited, want) {
+			t.Errorf("audit log lacks %s:\n%s", want, audited)
+		}
+	}
+}
+
+// An entity without the owner's label is not controlled and not even put
+// before the owner, on the server as main builds it.
+func TestEntityWithoutTheOwnersLabelIsNotControlled(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`"}`)
+	r.home.Mu.Lock()
+	r.home.CoreResults["config/entity_registry/get"] = `{"labels":["kitchen"],"name":null,"original_name":"Desk"}`
+	r.home.Mu.Unlock()
+	accessToken := r.authorize(t, "local")
+
+	text, isError := r.callToolWith(t, accessToken, "switch_turn_off", map[string]string{"entity_id": "switch.heating"})
+
+	if !isError || !strings.Contains(text, "not released") {
+		t.Fatalf("isError = %t, %s", isError, text)
+	}
+	if shown := r.asAdmin(t, http.MethodGet, "/", nil).body; !strings.Contains(shown, "No action is waiting") {
+		t.Fatalf("the refused call waits for approval:\n%s", shown)
+	}
+	r.home.Mu.Lock()
+	defer r.home.Mu.Unlock()
+	for _, s := range r.home.Services {
+		if strings.HasPrefix(s, "switch.") {
+			t.Fatalf("a service was called: %v", r.home.Services)
+		}
+	}
+	if !strings.Contains(r.auditText(t), `"decision":"not_released"`) {
+		t.Fatal("the refusal is not recorded")
 	}
 }

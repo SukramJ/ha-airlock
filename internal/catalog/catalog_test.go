@@ -58,6 +58,9 @@ func TestEveryToolIsFullyDeclared(t *testing.T) {
 		if tool.Handler == nil {
 			t.Errorf("tool %q has no handler", tool.Name)
 		}
+		if (tool.Act != nil) != (tool.Tier != catalog.R0) {
+			t.Errorf("tool %q (tier %s): a tool states its action exactly when it is above R0", tool.Name, tool.Tier)
+		}
 		var schema struct {
 			Type                 string `json:"type"`
 			AdditionalProperties *bool  `json:"additionalProperties"`

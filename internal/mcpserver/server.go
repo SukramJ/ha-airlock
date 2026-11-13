@@ -49,7 +49,8 @@ func principalOf(extra *mcp.RequestExtra) *gate.Principal {
 func New(g *gate.Gate, tools []catalog.Tool, version string) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ha-airlock", Version: version}, nil)
 	declared := make(map[string]bool, len(tools))
-	for _, tool := range tools {
+	for i := range tools {
+		tool := &tools[i]
 		declared[tool.Name] = true
 		server.AddTool(&mcp.Tool{
 			Name:        tool.Name,
@@ -84,6 +85,11 @@ func callGate(ctx context.Context, g *gate.Gate, extra *mcp.RequestExtra, name s
 	if err != nil {
 		// The gate withheld the result because it could not record the call.
 		return failure("The call could not be recorded in the audit log, so no result is returned.")
+	}
+	if outcome.Waiting {
+		// Not an error and not a result: the call is parked. The text says
+		// so in its first words.
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: outcome.Message}}}
 	}
 	if outcome.Output == nil {
 		return failure(outcome.Message)

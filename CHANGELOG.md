@@ -69,6 +69,14 @@ All notable changes to ha-airlock are recorded here. The format follows
   whole chain and compares the end of the file with the last line the
   server wrote, so lines cut off the end are reported while the server
   runs. See `docs/audit-log.md`.
+- Control (tier R1): six tools turn entities of the domains `light`,
+  `switch` and `input_boolean` on and off. An entity must carry the Home
+  Assistant label the policy names (`control_label`, default `airlock`).
+- Approval of actions: the policy knows the decision `approval`, and it is
+  the default for R1 in the `local` profile. Such a call waits, is shown
+  in the ha-airlock page with a description written by the server, and
+  runs once when it is repeated after an administrator approved it. See
+  `docs/approving-actions.md` and ADR 0005.
 
 ### Changed
 

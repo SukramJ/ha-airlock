@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/build"
 	"github.com/SukramJ/ha-airlock/internal/catalog"
@@ -165,7 +166,8 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	if err != nil {
 		return nil, err
 	}
-	consent, err := oauth.NewConsent(store, killSwitch, auditLog, logger)
+	approvals := approval.New(auditLog)
+	consent, err := oauth.NewConsent(store, killSwitch, auditLog, approvals, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +195,7 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	tools := catalog.All()
 	g := gate.New(gate.Config{
 		Policy: pol, Audit: auditLog, Core: provision.NewCore(coreURL, cred), Tools: tools,
-		Timeout: toolTimeout, Halted: killSwitch.Engaged,
+		Timeout: toolTimeout, Halted: killSwitch.Engaged, Approvals: approvals,
 	})
 	authz := oauth.NewServer(store, env.clientMetadata, opts.PublicURL, logger)
 	publicMux := http.NewServeMux()
