@@ -211,3 +211,39 @@ func TestHashIsOfTheJSONValueNotOfItsSpelling(t *testing.T) {
 		}
 	}
 }
+
+// How a write ended is noted on its change: a creation learns the object's
+// identifier, a failed write says why.
+func TestSettleNotesTheObjectOrTheFailure(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "changes.json")
+	j := open(t, path)
+	creation := update("")
+	creation.Before = nil
+	created, err := j.Record(context.Background(), creation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := j.Record(context.Background(), update("input_boolean.guest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := j.Settle(context.Background(), created.ID, "input_boolean.new", ""); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if err := j.Settle(context.Background(), failed.ID, "", "home assistant refused"); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if err := j.Settle(context.Background(), "no-such-id", "x", ""); !errors.Is(err, changes.ErrUnknown) {
+		t.Fatalf("unknown id: %v", err)
+	}
+
+	reopened := open(t, path)
+	if got, _ := reopened.Get(created.ID); got.Object != "input_boolean.new" || got.Failed != "" {
+		t.Fatalf("creation after settling: %+v", got)
+	}
+	if got, _ := reopened.Get(failed.ID); got.Object != "input_boolean.guest" || got.Failed != "home assistant refused" {
+		t.Fatalf("failed change after settling: %+v", got)
+	}
+}

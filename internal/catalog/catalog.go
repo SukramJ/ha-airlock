@@ -79,6 +79,36 @@ type Tool struct {
 	// tool of R0: a tool that changes something says what, to the gate and
 	// to the owner.
 	Act func(args json.RawMessage) (Action, error)
+	// Kind is the kind of configuration a tool of tier R2 changes, and
+	// Plan what one call would change. Every tool of R2 has both and
+	// neither Act nor Handler: it changes something only through its plan.
+	Kind Kind
+	Plan func(ctx context.Context, core Core, args json.RawMessage) (Change, error)
+}
+
+// Change is what one call of a tool of tier R2 would change, stated by the
+// server: from the checked arguments, and from what it read in Home
+// Assistant just now. It is what the owner is shown, what the approval is
+// bound to, and what is written.
+type Change struct {
+	// Summary is one sentence built from the tool's own words and from
+	// identifiers of a checked shape. It never holds a name.
+	Summary string
+	// Object identifies what is changed, and Name is what Home Assistant
+	// calls it now. Both are empty for a creation.
+	Object string
+	Name   string
+	// Entity is the entity whose label releases the object for change.
+	// Empty for a creation, which has nothing to release.
+	Entity string
+	// Before is the object as Home Assistant holds it; absent for a
+	// creation. After is the object as the call would leave it; absent for
+	// a deletion.
+	Before json.RawMessage
+	After  json.RawMessage
+	// Apply makes exactly this change. For a creation it returns the
+	// entity that now stands for the new object.
+	Apply func(ctx context.Context, core Core) (object string, result json.RawMessage, err error)
 }
 
 // All returns the catalogue. The slice is new on every call; the catalogue

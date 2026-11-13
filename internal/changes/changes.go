@@ -56,6 +56,9 @@ type Change struct {
 	// object as the change leaves it; absent for a deletion.
 	Before json.RawMessage `json:"before,omitempty"`
 	After  json.RawMessage `json:"after,omitempty"`
+	// Failed says why the write did not happen, if it did not. The change
+	// stays in the journal: it was approved and attempted.
+	Failed string `json:"failed,omitempty"`
 	// Undone is set once an administrator took the change back.
 	Undone *Undo `json:"undone,omitempty"`
 }
@@ -138,6 +141,32 @@ func (j *Journal) Get(id string) (Change, bool) {
 		}
 	}
 	return Change{}, false
+}
+
+// Settle notes how the write of a recorded change ended: the identifier of
+// the object, which a creation learns only then, or why it failed.
+func (j *Journal) Settle(ctx context.Context, id, object, failed string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("changes: settle: %w", err)
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	next := append([]Change{}, j.changes...)
+	for i := range next {
+		if next[i].ID != id {
+			continue
+		}
+		if object != "" {
+			next[i].Object = object
+		}
+		next[i].Failed = failed
+		if err := j.save(next); err != nil {
+			return err
+		}
+		j.changes = next
+		return nil
+	}
+	return ErrUnknown
 }
 
 // MarkUndone notes that an administrator took the change back. Like

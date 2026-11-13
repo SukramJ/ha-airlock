@@ -5,7 +5,9 @@
 // in this order: the caller's identity, the policy, the owner's approval
 // where the policy asks for one, the tool, redaction, the audit log. Before
 // the policy come the kill switch and the client's call limit; before a tool
-// acts on an entity, the check that the owner released that entity. No tool
+// acts on an entity, the check that the owner released that entity. A call
+// that changes configuration is, beyond that, bound to the state it would
+// replace and recorded in the journal of changes before it is made. No tool
 // reaches Home Assistant around the policy, and no result leaves around
 // redaction and the audit record.
 package gate
@@ -15,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -22,6 +25,7 @@ import (
 	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/catalog"
+	"github.com/SukramJ/ha-airlock/internal/changes"
 	"github.com/SukramJ/ha-airlock/internal/policy"
 	"github.com/SukramJ/ha-airlock/internal/redact"
 )
@@ -64,6 +68,12 @@ type Approvals interface {
 	Resolve(ctx context.Context, req *approval.Request) (approval.Status, string, error)
 }
 
+// Journal is the journal of configuration changes, as the gate uses it.
+type Journal interface {
+	Record(ctx context.Context, change changes.Change) (changes.Change, error)
+	Settle(ctx context.Context, id, object, failed string) error
+}
+
 // Config is what a gate is built from.
 type Config struct {
 	Policy policy.Policy
@@ -78,6 +88,9 @@ type Config struct {
 	// Approvals parks the calls the policy wants approved. Nil means such
 	// calls are refused.
 	Approvals Approvals
+	// Journal records configuration changes before they are made. Nil
+	// means no configuration is changed.
+	Journal Journal
 }
 
 // Gate holds what a call is checked against.
@@ -89,6 +102,7 @@ type Gate struct {
 	timeout time.Duration
 	halted  func() bool
 	approve Approvals
+	journal Journal
 	now     func() time.Time
 
 	mu      sync.Mutex
@@ -114,7 +128,7 @@ func New(cfg Config) *Gate {
 	}
 	return &Gate{
 		policy: cfg.Policy, audit: cfg.Audit, core: cfg.Core, tools: byName, timeout: cfg.Timeout,
-		halted: halted, approve: cfg.Approvals, now: time.Now, buckets: map[string]*bucket{},
+		halted: halted, approve: cfg.Approvals, journal: cfg.Journal, now: time.Now, buckets: map[string]*bucket{},
 	}
 }
 
@@ -193,6 +207,10 @@ func (g *Gate) decideAndRun(ctx context.Context, principal *Principal, toolName 
 	runCtx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
 
+	if tool.Tier == catalog.R2 {
+		return g.change(ctx, runCtx, principal, &tool, args, entry)
+	}
+
 	// What the call would do, and whether the owner released what it acts
 	// on. This runs before a call is parked and again before it runs: a
 	// release withdrawn after the approval stops the call.
@@ -218,7 +236,12 @@ func (g *Gate) decideAndRun(ctx context.Context, principal *Principal, toolName 
 	}
 
 	if decision == policy.Approval {
-		if outcome, approved := g.approval(ctx, &request, args, entry); !approved {
+		key, err := approval.Key(request.Client, request.Tool, args)
+		if err != nil {
+			entry.Result = "refused: the arguments are not JSON"
+			return Outcome{Message: "the arguments are not valid JSON"}
+		}
+		if outcome, approved := g.approval(ctx, &request, key, entry); !approved {
 			return outcome
 		}
 	}
@@ -229,7 +252,12 @@ func (g *Gate) decideAndRun(ctx context.Context, principal *Principal, toolName 
 		entry.Result = "error: " + message
 		return Outcome{Allowed: true, Message: message}
 	}
+	return finish(result, entry)
+}
 
+// finish redacts a tool's result, wraps it for the client and notes it in
+// the audit entry.
+func finish(result json.RawMessage, entry *audit.Entry) Outcome {
 	clean, redactions, err := redact.JSON(result)
 	if err != nil {
 		entry.Result = "error: the result could not be redacted and was withheld"
@@ -248,18 +276,156 @@ func (g *Gate) decideAndRun(ctx context.Context, principal *Principal, toolName 
 	return Outcome{Allowed: true, Output: output}
 }
 
-// approval takes a call the policy wants approved to the store. Only an
-// approval an administrator gave for exactly this client, tool and
-// arguments lets the call go on; it is used up by that.
-func (g *Gate) approval(ctx context.Context, request *approval.Request, args json.RawMessage, entry *audit.Entry) (Outcome, bool) {
+// change runs a call that changes configuration. In this order: the policy
+// for the kind; the tool's plan, which reads what is there now; the release
+// of an existing object; the approval, bound to the state that was read;
+// the journal; the change itself. A creation is given the control label
+// afterwards, here and nowhere else.
+func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *catalog.Tool, args json.RawMessage, entry *audit.Entry) Outcome {
+	if tool.Plan == nil || tool.Kind == "" || tool.Act != nil || tool.Handler != nil {
+		entry.Decision, entry.Result = "undeclared_change", "refused"
+		return Outcome{Message: "the tool does not declare what it changes"}
+	}
+	kind := g.policy.Configuration(principal.Profile, tool.Kind)
+	if kind.Change != policy.Approval {
+		entry.Decision, entry.Result = "kind_denied", "refused"
+		return Outcome{Message: fmt.Sprintf("the policy does not allow changing configuration of the kind %q for profile %q", tool.Kind, principal.Profile)}
+	}
+	if g.journal == nil {
+		entry.Result = "refused: there is no journal of changes"
+		return Outcome{Message: "this server cannot record configuration changes, so it makes none"}
+	}
+
+	plan, err := tool.Plan(runCtx, g.core, args)
+	if err != nil {
+		message, _ := redact.String(err.Error())
+		entry.Result = "error: " + message
+		return Outcome{Message: message}
+	}
+	creation := len(plan.Before) == 0
+	switch {
+	case plan.Apply == nil, creation && len(plan.After) == 0, !creation && plan.Entity == "":
+		entry.Decision, entry.Result = "undeclared_change", "refused"
+		return Outcome{Message: "the tool does not declare what it changes"}
+	case len(plan.Before)+len(plan.After) > approval.MaxDifferenceBytes:
+		entry.Decision, entry.Result = "too_large", "refused"
+		return Outcome{Message: fmt.Sprintf("the change is larger than %d bytes and cannot be put before the owner", approval.MaxDifferenceBytes)}
+	}
+
+	request := approval.Request{
+		Client: principal.Client, Tool: tool.Name, Summary: plan.Summary, Arguments: entry.Arguments,
+		Change: &approval.Difference{Kind: string(tool.Kind), Object: plan.Object, Name: plan.Name, Before: plan.Before, After: plan.After},
+	}
+	switch {
+	case creation:
+		request.Change.Note = fmt.Sprintf("ha-airlock will put the label %q on the new object: the application can then "+
+			"ask to change it again, each time with your approval.", g.policy.ControlLabel())
+	case kind.Release == policy.ReleaseLabel:
+		entities, refusal := g.released(runCtx, []string{plan.Entity})
+		if refusal != "" {
+			entry.Decision, entry.Result = "not_released", "refused: "+refusal
+			return Outcome{Message: fmt.Sprintf("this object is not released for change; the owner releases it by giving it "+
+				"the label %q in Home Assistant", g.policy.ControlLabel())}
+		}
+		request.Entities = entities
+	}
+
+	before, err := changes.Hash(plan.Before)
+	if err != nil {
+		entry.Result = "error: the present state could not be read"
+		return Outcome{Message: "the present state of the object could not be read"}
+	}
+	after, err := changes.Hash(plan.After)
+	if err != nil {
+		entry.Result = "error: the requested state is not JSON"
+		return Outcome{Message: "the requested state is not valid JSON"}
+	}
+	// The key holds the state that was read just now. A repetition that
+	// finds another state has another key, and no approval.
+	key, err := approval.KeyBoundTo(principal.Client, tool.Name, args, before)
+	if err != nil {
+		entry.Result = "refused: the arguments are not JSON"
+		return Outcome{Message: "the arguments are not valid JSON"}
+	}
+	if outcome, approved := g.approval(ctx, &request, key, entry); !approved {
+		return outcome
+	}
+	outcome := g.write(ctx, runCtx, principal, tool, &plan, entry)
+	if outcome.Output != nil {
+		entry.Result += fmt.Sprintf(", before %s, after %s", before, after)
+	}
+	return outcome
+}
+
+// write makes an approved change: the journal first, then Home Assistant,
+// then the label for what was created.
+func (g *Gate) write(ctx, runCtx context.Context, principal *Principal, tool *catalog.Tool, plan *catalog.Change, entry *audit.Entry) Outcome {
+	// On record first: a change that cannot be undone from the journal is
+	// not made. The record is written even if the caller has gone away.
+	recorded, err := g.journal.Record(context.WithoutCancel(ctx), changes.Change{
+		Client: principal.Client, Tool: tool.Name, Kind: string(tool.Kind), Object: plan.Object,
+		Before: plan.Before, After: plan.After,
+	})
+	if err != nil {
+		entry.Result = "refused: the change could not be recorded in the journal"
+		return Outcome{Message: "the change could not be recorded for undo, so it was not made"}
+	}
+	object, result, err := plan.Apply(runCtx, g.core)
+	if err != nil {
+		message, _ := redact.String(err.Error())
+		_ = g.journal.Settle(context.WithoutCancel(ctx), recorded.ID, "", message)
+		entry.Result = "error: " + message
+		return Outcome{Allowed: true, Message: message}
+	}
+	labelled := ""
+	if len(plan.Before) == 0 {
+		if err := g.label(runCtx, object); err != nil {
+			labelled = "; the control label could not be set on the new object"
+		}
+	}
+	if err := g.journal.Settle(context.WithoutCancel(ctx), recorded.ID, object, ""); err != nil {
+		labelled += "; the journal could not note the object"
+	}
+	outcome := finish(result, entry)
+	entry.Result += labelled + "; change " + recorded.ID
+	return outcome
+}
+
+// label puts the control label on an object ha-airlock created, beside the
+// labels it has. No argument of a client reaches this function.
+func (g *Gate) label(ctx context.Context, entity string) error {
+	if entity == "" {
+		return errors.New("the new object has no entity")
+	}
+	var reg struct {
+		Labels []string `json:"labels"`
+	}
+	if err := g.core.Call(ctx, "config/entity_registry/get", map[string]string{"entity_id": entity}, &reg); err != nil {
+		return fmt.Errorf("read the new object's registry entry: %w", err)
+	}
+	label := g.policy.ControlLabel()
+	for _, l := range reg.Labels {
+		if l == label {
+			return nil
+		}
+	}
+	update := struct {
+		EntityID string   `json:"entity_id"`
+		Labels   []string `json:"labels"`
+	}{EntityID: entity, Labels: append(reg.Labels, label)}
+	if err := g.core.Call(ctx, "config/entity_registry/update", update, nil); err != nil {
+		return fmt.Errorf("label the new object: %w", err)
+	}
+	return nil
+}
+
+// approval takes a call the policy wants approved to the store, under the
+// key that binds it. Only an approval an administrator gave for exactly
+// that key lets the call go on; it is used up by that.
+func (g *Gate) approval(ctx context.Context, request *approval.Request, key string, entry *audit.Entry) (Outcome, bool) {
 	if g.approve == nil {
 		entry.Result = "refused: no approval is possible"
 		return Outcome{Message: "this call needs an approval, and this server cannot ask for one"}, false
-	}
-	key, err := approval.Key(request.Client, request.Tool, args)
-	if err != nil {
-		entry.Result = "refused: the arguments are not JSON"
-		return Outcome{Message: "the arguments are not valid JSON"}, false
 	}
 	request.Key = key
 	status, approver, err := g.approve.Resolve(ctx, request)
