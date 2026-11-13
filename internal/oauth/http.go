@@ -298,8 +298,17 @@ func writeJSON(w http.ResponseWriter, status int, value any) { //nolint:revive /
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-const pageStyle = `<style>body{font-family:system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;line-height:1.5}
-.code{font-size:2rem;letter-spacing:.15em;font-weight:600;margin:1rem 0}small{color:#555}</style>`
+// colours is the part of every page's style that sets its colours. A page
+// states its own background and text colour for the light and for the dark
+// scheme: inside Home Assistant it is shown in a frame, and must be
+// readable whatever lies behind that frame.
+const colours = `:root{color-scheme:light dark;--bg:#fff;--fg:#1c1c1c;--muted:#555;--line:#c8c8c8;--warn:#a40000;--ok:#1a6b1a;--note:#e8ebff;--link:#0b57d0}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1c1e;--fg:#e6e6e6;--muted:#a8a8a8;--line:#4a4a4a;--warn:#ff8a80;--ok:#7fd68a;--note:#2a3050;--link:#8ab4f8}}
+html,body{background:var(--bg);color:var(--fg)}a{color:var(--link)}small{color:var(--muted)}.warn{color:var(--warn)}.ok{color:var(--ok)}
+`
+
+const pageStyle = `<style>` + colours + `body{font-family:system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;line-height:1.5}
+.code{font-size:2rem;letter-spacing:.15em;font-weight:600;margin:1rem 0}</style>`
 
 var waitPage = template.Must(template.New("wait").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>ha-airlock: waiting for approval</title>` + pageStyle + `</head><body>
