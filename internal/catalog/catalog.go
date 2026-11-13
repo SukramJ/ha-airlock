@@ -54,25 +54,30 @@ type Tool struct {
 	// InputSchema is the JSON Schema of the arguments.
 	InputSchema json.RawMessage
 	Handler     Handler
+	// Act states what a call would do. Every tool above R0 has it, and no
+	// tool of R0: a tool that changes something says what, to the gate and
+	// to the owner.
+	Act func(args json.RawMessage) (Action, error)
 }
 
 // All returns the catalogue. The slice is new on every call; the catalogue
 // itself cannot be changed.
 func All() []Tool {
-	return []Tool{
+	return append([]Tool{
 		systemLogList(),
 		repairsListIssues(),
 		configEntriesList(),
 		traceList(),
 		logbookEvents(),
-	}
+	}, controlTools()...)
 }
 
 // Lookup returns the tool with the given name.
 func Lookup(name string) (Tool, bool) {
-	for _, tool := range All() {
-		if tool.Name == name {
-			return tool, true
+	tools := All()
+	for i := range tools {
+		if tools[i].Name == name {
+			return tools[i], true
 		}
 	}
 	return Tool{}, false

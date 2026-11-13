@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/catalog"
 	"github.com/SukramJ/ha-airlock/internal/gate"
@@ -25,7 +27,7 @@ const secretInResult = "hunter2pass"
 // probeTool is a tool of the given tier that counts how often it ran and
 // returns a result with a credential in it.
 func probeTool(tier catalog.Tier, runs *atomic.Int32) catalog.Tool {
-	return catalog.Tool{
+	tool := catalog.Tool{
 		Name: "probe_" + string(tier),
 		Tier: tier,
 		Handler: func(context.Context, catalog.Core, json.RawMessage) (json.RawMessage, error) {
@@ -33,6 +35,60 @@ func probeTool(tier catalog.Tier, runs *atomic.Int32) catalog.Tool {
 			return json.RawMessage(`{"password":"` + secretInResult + `","state":"on"}`), nil
 		},
 	}
+	if tier != catalog.R0 {
+		tool.Act = func(json.RawMessage) (catalog.Action, error) {
+			return catalog.Action{Summary: "Probe tier " + string(tier)}, nil
+		}
+	}
+	return tool
+}
+
+// home is a Home Assistant that knows entities and their labels, and
+// records the services called on it.
+type home struct {
+	mu       sync.Mutex
+	labels   map[string][]string
+	names    map[string]string
+	services []string
+}
+
+func (h *home) Call(_ context.Context, command string, params, out any) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	switch command {
+	case "config/entity_registry/get":
+		var p struct {
+			EntityID string `json:"entity_id"`
+		}
+		_ = json.Unmarshal(raw, &p)
+		labels, ok := h.labels[p.EntityID]
+		if !ok {
+			return errors.New("home assistant command failed: not_found: Entity not found")
+		}
+		answer, _ := json.Marshal(map[string]any{"labels": labels, "name": nil, "original_name": h.names[p.EntityID]})
+		return json.Unmarshal(answer, out)
+	case "call_service":
+		h.services = append(h.services, string(raw))
+		return json.Unmarshal([]byte(`{"context":{"id":"01J"}}`), out)
+	default:
+		return errors.New("unexpected command " + command)
+	}
+}
+
+func (h *home) setLabels(entity string, labels ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.labels[entity] = labels
+}
+
+func (h *home) called() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.services...)
 }
 
 type fixture struct {
@@ -40,7 +96,9 @@ type fixture struct {
 	auditPath string
 	runs      map[catalog.Tier]*atomic.Int32
 	// halted is the kill switch of the test.
-	halted *atomic.Bool
+	halted    *atomic.Bool
+	approvals *approval.Store
+	home      *home
 }
 
 func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture {
@@ -51,13 +109,22 @@ func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture 
 		t.Fatalf("open audit log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	f := fixture{auditPath: path, runs: map[catalog.Tier]*atomic.Int32{}, halted: &atomic.Bool{}}
-	tools := extra
+	f := fixture{
+		auditPath: path, runs: map[catalog.Tier]*atomic.Int32{}, halted: &atomic.Bool{}, approvals: approval.New(log),
+		home: &home{
+			labels: map[string][]string{"light.kitchen": {"other", "airlock"}, "light.hall": {"airlock"}, "light.cellar": {"other"}},
+			names:  map[string]string{"light.kitchen": "Kitchen ceiling"},
+		},
+	}
+	tools := append([]catalog.Tool{}, extra...)
+	tools = append(tools, catalog.All()...)
 	for _, tier := range catalog.Tiers() {
 		f.runs[tier] = &atomic.Int32{}
 		tools = append(tools, probeTool(tier, f.runs[tier]))
 	}
-	f.gate = gate.New(gate.Config{Policy: pol, Audit: log, Tools: tools, Timeout: 5 * time.Second, Halted: f.halted.Load})
+	f.gate = gate.New(gate.Config{
+		Policy: pol, Audit: log, Core: f.home, Tools: tools, Timeout: 5 * time.Second, Halted: f.halted.Load, Approvals: f.approvals,
+	})
 	return f
 }
 
@@ -145,7 +212,8 @@ func TestAllowedCallReturnsRedactedDataWithTheNoticeAndIsRecorded(t *testing.T) 
 }
 
 // Every tier, under the default policy and for both profiles: only the
-// local profile's R0 runs; every refusal is recorded and runs nothing.
+// local profile's R0 runs, its R1 waits for an approval; every refusal is
+// recorded and runs nothing.
 func TestPolicyDecidesEveryTierForEveryProfile(t *testing.T) {
 	t.Parallel()
 	for _, profile := range []string{policy.ProfileLocal, policy.ProfileRemote, "unknown"} {
@@ -163,15 +231,21 @@ func TestPolicyDecidesEveryTierForEveryProfile(t *testing.T) {
 				t.Errorf("%s/%s: ran = %t, allowed = %t, want %t", profile, tier, ran, out.Allowed, wantRun)
 			}
 			records := f.records(t)
-			wantDecision := "deny"
-			if wantRun {
+			wantDecision, wantResult := "deny", "refused"
+			switch {
+			case wantRun:
 				wantDecision = "allow"
+			case profile == policy.ProfileLocal && tier == catalog.R1:
+				wantDecision, wantResult = "approval", "waiting for approval"
 			}
 			if len(records) != 1 || records[0]["decision"] != wantDecision {
 				t.Errorf("%s/%s: audit records = %v", profile, tier, records)
 			}
-			if !wantRun && (out.Output != nil || records[0]["result"] != "refused") {
-				t.Errorf("%s/%s: a refused call produced output or was not recorded as refused", profile, tier)
+			if !wantRun && (out.Output != nil || records[0]["result"] != wantResult) {
+				t.Errorf("%s/%s: a call that did not run produced output or was recorded as %v", profile, tier, records[0]["result"])
+			}
+			if out.Waiting != (wantDecision == "approval") {
+				t.Errorf("%s/%s: waiting = %t", profile, tier, out.Waiting)
 			}
 		}
 	}
@@ -314,14 +388,19 @@ func TestCallIsRecordedEvenWhenTheCallerHasGone(t *testing.T) {
 }
 
 // Every tool of the real catalogue has a tier the policy decides: under the
-// default policy the local profile may use exactly the R0 tools.
+// default policy the local profile may use the R0 tools, and the R1 tools
+// after an approval.
 func TestEveryCatalogueToolIsDecidedByThePolicy(t *testing.T) {
 	t.Parallel()
 	for _, tool := range catalog.All() {
 		got := policy.Default().Decide(policy.ProfileLocal, tool.Tier)
 		want := policy.Deny
-		if tool.Tier == catalog.R0 {
+		switch tool.Tier {
+		case catalog.R0:
 			want = policy.Allow
+		case catalog.R1:
+			want = policy.Approval
+		case catalog.R2, catalog.R3, catalog.R4:
 		}
 		if got != want {
 			t.Errorf("tool %s (tier %s): decision %s, want %s", tool.Name, tool.Tier, got, want)
@@ -413,5 +492,266 @@ func TestRefusedCallsCountAgainstTheLimit(t *testing.T) {
 	}
 	if out, _ := f.gate.Call(context.Background(), localClient, "probe_R0", nil); out.Allowed {
 		t.Fatal("an allowed call ran after the limit was used up by refused ones")
+	}
+}
+
+const kitchenOn = `{"entity_id":"light.kitchen"}`
+
+func (f fixture) call(t *testing.T, principal *gate.Principal, tool, args string) gate.Outcome {
+	t.Helper()
+	out, err := f.gate.Call(context.Background(), principal, tool, json.RawMessage(args))
+	if err != nil {
+		t.Fatalf("call %s: %v", tool, err)
+	}
+	return out
+}
+
+// decide approves or denies the one waiting request as admin-1.
+func (f fixture) decide(t *testing.T, approve bool) approval.Request {
+	t.Helper()
+	pending := f.approvals.Pending()
+	if len(pending) != 1 {
+		t.Fatalf("%d requests wait, want 1", len(pending))
+	}
+	if err := f.approvals.Decide(context.Background(), pending[0].ID, approve, "admin-1"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	return pending[0]
+}
+
+// The approval decision, end to end on a real control tool: the call waits
+// without running, runs once after the approval, and waits again after.
+func TestCallThatNeedsApprovalRunsOnceAfterAnAdministratorApprovedIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, policy.Default())
+
+	first := f.call(t, localClient, "light_turn_on", kitchenOn)
+	if !first.Waiting || first.Allowed || first.Output != nil || !strings.HasPrefix(first.Message, "NOT RUN YET") {
+		t.Fatalf("first call = %+v, want it to wait", first)
+	}
+	if len(f.home.called()) != 0 {
+		t.Fatal("the service was called before the approval")
+	}
+	shown := f.decide(t, true)
+	if shown.Summary != "Turn on light.kitchen" || shown.Client != "client-a" || shown.Tool != "light_turn_on" ||
+		len(shown.Entities) != 1 || shown.Entities[0] != (approval.Entity{ID: "light.kitchen", Name: "Kitchen ceiling"}) ||
+		string(shown.Arguments) != kitchenOn {
+		t.Fatalf("the owner was shown %+v", shown)
+	}
+
+	// The same JSON value, written differently.
+	second := f.call(t, localClient, "light_turn_on", ` { "entity_id" : "light.kitchen" } `)
+	if !second.Allowed || second.Waiting || !strings.Contains(string(second.Output), `"called":"light.turn_on"`) {
+		t.Fatalf("call after the approval = %+v", second)
+	}
+	want := `{"domain":"light","service":"turn_on","target":{"entity_id":["light.kitchen"]}}`
+	if calls := f.home.called(); len(calls) != 1 || calls[0] != want {
+		t.Fatalf("services called = %v, want one %s", calls, want)
+	}
+
+	third := f.call(t, localClient, "light_turn_on", kitchenOn)
+	if !third.Waiting || len(f.home.called()) != 1 {
+		t.Fatalf("the approval was used twice: %+v, %d service calls", third, len(f.home.called()))
+	}
+
+	records := f.records(t)
+	if len(records) != 4 {
+		t.Fatalf("%d audit records, want 4: %v", len(records), records)
+	}
+	if r := records[0]; r["decision"] != "approval" || r["result"] != "waiting for approval" || r["approver"] != nil {
+		t.Errorf("record of the waiting call = %v", r)
+	}
+	if r := records[1]; r["event"] != "action_approved" || r["approver"] != "admin-1" || r["tool"] != "light_turn_on" {
+		t.Errorf("record of the approval = %v", r)
+	}
+	if r := records[2]; r["decision"] != "approval" || r["approver"] != "admin-1" || !strings.HasPrefix(r["result"].(string), "ok: ") {
+		t.Errorf("record of the run = %v", r)
+	}
+}
+
+func TestApprovalDoesNotCarryOverToAnotherClientToolOrEntity(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, policy.Default())
+	f.call(t, localClient, "light_turn_on", kitchenOn)
+	f.decide(t, true)
+
+	otherClient := &gate.Principal{Client: "client-b", Profile: policy.ProfileLocal}
+	if out := f.call(t, otherClient, "light_turn_on", kitchenOn); !out.Waiting {
+		t.Errorf("another client used the approval: %+v", out)
+	}
+	if out := f.call(t, localClient, "light_turn_off", kitchenOn); !out.Waiting {
+		t.Errorf("another tool used the approval: %+v", out)
+	}
+	if out := f.call(t, localClient, "light_turn_on", `{"entity_id":"light.hall"}`); !out.Waiting {
+		t.Errorf("another entity used the approval: %+v", out)
+	}
+	if calls := f.home.called(); len(calls) != 0 {
+		t.Fatalf("services called without an approval of their own: %v", calls)
+	}
+	if out := f.call(t, localClient, "light_turn_on", kitchenOn); !out.Allowed {
+		t.Fatalf("the approved call itself did not run: %+v", out)
+	}
+}
+
+func TestDeniedCallDoesNotRunAndIsRecorded(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, policy.Default())
+	f.call(t, localClient, "light_turn_on", kitchenOn)
+	f.decide(t, false)
+
+	out := f.call(t, localClient, "light_turn_on", kitchenOn)
+
+	if out.Allowed || out.Waiting || !strings.Contains(out.Message, "denied") || len(f.home.called()) != 0 {
+		t.Fatalf("call after the denial = %+v, %d service calls", out, len(f.home.called()))
+	}
+	records := f.records(t)
+	if r := records[len(records)-1]; r["result"] != "refused: denied by an administrator" || r["approver"] != "admin-1" {
+		t.Fatalf("record = %v", r)
+	}
+}
+
+// An entity is controlled only if the owner released it with the label —
+// whether the policy asks for an approval or not. Nothing else is even put
+// before the owner.
+func TestOnlyEntitiesTheOwnerReleasedAreControlled(t *testing.T) {
+	t.Parallel()
+	policies := map[string]policy.Policy{
+		"approval": policy.Default(),
+		"allow":    parsePolicy(t, `{"version":1,"profiles":{"local":{"R1":"allow"}}}`),
+	}
+	for name, pol := range policies {
+		f := newFixture(t, pol)
+		for entity, why := range map[string]string{
+			"light.cellar":  "carries another label",
+			"light.unknown": "does not exist",
+		} {
+			out := f.call(t, localClient, "light_turn_on", `{"entity_id":"`+entity+`"}`)
+			if out.Allowed || out.Waiting || !strings.Contains(out.Message, `"airlock"`) {
+				t.Errorf("%s: %s (%s) = %+v, want a refusal", name, entity, why, out)
+			}
+			if strings.Contains(out.Message, "exist") || strings.Contains(out.Message, "not_found") {
+				t.Errorf("%s: the refusal tells the client whether %s exists: %s", name, entity, out.Message)
+			}
+		}
+		if out := f.call(t, localClient, "light_turn_on", `{"entity_id":"lock.front_door"}`); out.Allowed || out.Waiting {
+			t.Errorf("%s: an entity of another domain = %+v", name, out)
+		}
+		if len(f.approvals.Pending()) != 0 || len(f.home.called()) != 0 {
+			t.Errorf("%s: %d requests wait, %d services called; want none", name, len(f.approvals.Pending()), len(f.home.called()))
+		}
+		records := f.records(t)
+		for _, i := range []int{0, 1} {
+			if records[i]["decision"] != "not_released" || !strings.HasPrefix(records[i]["result"].(string), "refused: light.") {
+				t.Errorf("%s: record %d = %v", name, i, records[i])
+			}
+		}
+	}
+
+	f := newFixture(t, policies["allow"])
+	if out := f.call(t, localClient, "light_turn_on", kitchenOn); !out.Allowed || len(f.home.called()) != 1 {
+		t.Fatalf("a released entity under allow = %+v", out)
+	}
+}
+
+func TestTheControlLabelIsTheOneThePolicyNames(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R1":"allow"}},"control_label":"other"}`))
+	if out := f.call(t, localClient, "light_turn_on", `{"entity_id":"light.cellar"}`); !out.Allowed {
+		t.Errorf("the entity with the policy's label = %+v", out)
+	}
+	if out := f.call(t, localClient, "light_turn_on", `{"entity_id":"light.hall"}`); out.Allowed {
+		t.Errorf("an entity with the default label ran under another label: %+v", out)
+	}
+}
+
+func TestReleaseWithdrawnAfterTheApprovalStopsTheCall(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, policy.Default())
+	f.call(t, localClient, "light_turn_on", kitchenOn)
+	f.decide(t, true)
+	f.home.setLabels("light.kitchen")
+
+	out := f.call(t, localClient, "light_turn_on", kitchenOn)
+
+	if out.Allowed || out.Waiting || len(f.home.called()) != 0 {
+		t.Fatalf("call = %+v, %d service calls; want a refusal", out, len(f.home.called()))
+	}
+}
+
+func TestApprovedCallDoesNotRunWhileTheKillSwitchIsEngaged(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, policy.Default())
+	f.call(t, localClient, "light_turn_on", kitchenOn)
+	f.decide(t, true)
+	f.halted.Store(true)
+
+	out := f.call(t, localClient, "light_turn_on", kitchenOn)
+
+	if out.Allowed || len(f.home.called()) != 0 || !strings.Contains(out.Message, "halted") {
+		t.Fatalf("call = %+v, %d service calls", out, len(f.home.called()))
+	}
+}
+
+// The approval decision applies to any tier: a read the policy wants
+// approved waits like an action.
+func TestApprovalWorksForATierWithoutEntities(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R0":"approval","R2":"approval"}}}`))
+	for tier, summary := range map[catalog.Tier]string{catalog.R0: "Run probe_R0", catalog.R2: "Probe tier R2"} {
+		if out := f.call(t, localClient, "probe_"+string(tier), `{}`); !out.Waiting || f.runs[tier].Load() != 0 {
+			t.Fatalf("%s: %+v", tier, out)
+		}
+		if shown := f.decide(t, true); shown.Summary != summary {
+			t.Fatalf("%s: the owner was shown %q, want %q", tier, shown.Summary, summary)
+		}
+		if out := f.call(t, localClient, "probe_"+string(tier), `{}`); !out.Allowed || f.runs[tier].Load() != 1 {
+			t.Fatalf("%s after approval: %+v", tier, out)
+		}
+	}
+}
+
+func TestToolAboveR0ThatDoesNotStateItsActionIsRefused(t *testing.T) {
+	t.Parallel()
+	var runs atomic.Int32
+	silent := probeTool(catalog.R1, &runs)
+	silent.Name, silent.Act = "silent", nil
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R1":"allow"}}}`), silent)
+
+	out := f.call(t, localClient, "silent", `{}`)
+
+	if out.Allowed || runs.Load() != 0 {
+		t.Fatalf("call = %+v, runs = %d", out, runs.Load())
+	}
+	if r := f.records(t)[0]; r["decision"] != "undeclared_action" {
+		t.Fatalf("record = %v", r)
+	}
+}
+
+func TestCallThatNeedsApprovalIsRefusedWhereNoneCanBeGiven(t *testing.T) {
+	t.Parallel()
+	log, err := audit.Open(filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	var runs atomic.Int32
+	g := gate.New(gate.Config{Policy: policy.Default(), Audit: log, Tools: []catalog.Tool{probeTool(catalog.R1, &runs)}, Timeout: time.Second})
+
+	out, err := g.Call(context.Background(), localClient, "probe_R1", nil)
+
+	if err != nil || out.Allowed || out.Waiting || runs.Load() != 0 {
+		t.Fatalf("call = %+v, %v, runs = %d", out, err, runs.Load())
+	}
+}
+
+func TestClientWithTooManyWaitingCallsIsToldSo(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R2":"approval"}}}`))
+	var last gate.Outcome
+	for i := range 6 {
+		last = f.call(t, localClient, "probe_R2", `{"n":`+string(rune('0'+i))+`}`)
+	}
+	if last.Waiting || last.Allowed || !strings.Contains(last.Message, "too many") || len(f.approvals.Pending()) != 5 {
+		t.Fatalf("sixth call = %+v, %d waiting", last, len(f.approvals.Pending()))
 	}
 }

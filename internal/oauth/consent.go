@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/policy"
 )
@@ -35,6 +36,7 @@ type Consent struct {
 	store  *Store
 	halt   KillSwitch
 	audit  Journal
+	action Actions
 	csrf   string
 	logger *slog.Logger
 }
@@ -50,14 +52,20 @@ type Journal interface {
 	Read(ctx context.Context, before uint64, limit int) (audit.Page, error)
 }
 
-// NewConsent returns the consent page over a store, the kill switch and the
-// audit log.
-func NewConsent(store *Store, killSwitch KillSwitch, journal Journal, logger *slog.Logger) (*Consent, error) {
+// Actions are the tool calls that wait for an administrator's decision.
+type Actions interface {
+	Pending() []approval.Request
+	Decide(ctx context.Context, id string, approve bool, by string) error
+}
+
+// NewConsent returns the consent page over a store, the kill switch, the
+// audit log and the waiting actions.
+func NewConsent(store *Store, killSwitch KillSwitch, journal Journal, actions Actions, logger *slog.Logger) (*Consent, error) {
 	csrf, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
-	return &Consent{store: store, halt: killSwitch, audit: journal, csrf: csrf, logger: logger}, nil
+	return &Consent{store: store, halt: killSwitch, audit: journal, action: actions, csrf: csrf, logger: logger}, nil
 }
 
 // Register adds the consent page to mux. The paths are relative to the
@@ -68,6 +76,7 @@ func (c *Consent) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /decide", c.decide)
 	mux.HandleFunc("POST /revoke", c.revoke)
 	mux.HandleFunc("POST /halt", c.setHalt)
+	mux.HandleFunc("POST /action", c.decideAction)
 }
 
 // administrator returns the Home Assistant user behind a request, if the
@@ -102,14 +111,37 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 	type grantView struct {
 		ID, Client, ClientHost, Profile, Created, LastUsed string
 	}
+	type entityView struct{ ID, Name string }
+	type actionView struct {
+		ID, Client, ClientHost, Tool, Summary, Arguments, Age string
+		Entities                                              []entityView
+	}
 	view := struct {
 		CSRF, Message string
 		Halted        bool
+		Actions       []actionView
 		Pending       []pendingView
 		Grants        []grantView
 		Profiles      []string
 	}{CSRF: c.csrf, Message: message, Halted: c.halt.Engaged(), Profiles: []string{policy.ProfileLocal, policy.ProfileRemote}}
 	now := time.Now()
+	names := map[string]string{}
+	approved := c.store.Grants()
+	for i := range approved {
+		names[approved[i].ClientID] = approved[i].ClientName
+	}
+	waiting := c.action.Pending()
+	for i := range waiting {
+		a := &waiting[i]
+		v := actionView{
+			ID: a.ID, Client: names[a.Client], ClientHost: hostOf(a.Client), Tool: a.Tool, Summary: a.Summary,
+			Arguments: string(a.Arguments), Age: now.Sub(a.CreatedAt).Round(time.Second).String(),
+		}
+		for _, e := range a.Entities {
+			v.Entities = append(v.Entities, entityView{ID: e.ID, Name: e.Name})
+		}
+		view.Actions = append(view.Actions, v)
+	}
 	pending := c.store.PendingRequests()
 	for i := range pending {
 		p := &pending[i]
@@ -250,6 +282,27 @@ func (c *Consent) decide(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// decideAction records the administrator's decision on a waiting tool call.
+func (c *Consent) decideAction(w http.ResponseWriter, r *http.Request) {
+	userID, ok := c.checked(w, r)
+	if !ok {
+		return
+	}
+	approve := r.PostForm.Get("action") == "approve"
+	err := c.action.Decide(r.Context(), r.PostForm.Get("id"), approve, userID)
+	switch {
+	case errors.Is(err, approval.ErrUnknown):
+		c.render(w, r, "That action has expired or was already decided.")
+	case err != nil:
+		c.logger.ErrorContext(r.Context(), "decision on an action failed", slog.Any("error", err))
+		c.render(w, r, "The decision could not be recorded and did not take effect.")
+	case approve:
+		c.render(w, r, "Approved. The action runs when the application repeats its call.")
+	default:
+		c.render(w, r, "Denied. The action does not run.")
+	}
+}
+
 func (c *Consent) setHalt(w http.ResponseWriter, r *http.Request) {
 	userID, ok := c.checked(w, r)
 	if !ok {
@@ -295,7 +348,19 @@ dt{font-weight:600}dd{margin:0 0 .4rem 0}small{color:#555}</style></head><body>
 {{else}}<p>Tools run for approved applications, as the policy allows.</p>
 <form method="post" action="halt"><input type="hidden" name="csrf" value="{{.CSRF}}"><button name="action" value="engage">Halt all tool calls</button></form>{{end}}
 </section>
-<h2>Waiting for your approval</h2>
+<h2>Actions waiting for your approval</h2>
+{{range .Actions}}<section>
+<p><strong>{{.Summary}}</strong></p>
+<dl>{{range .Entities}}<dt>Entity</dt><dd>{{.ID}}{{if .Name}} — {{.Name}}{{end}}</dd>{{end}}
+<dt>Requested by</dt><dd>{{if .Client}}{{.Client}} ({{.ClientHost}}){{else}}{{.ClientHost}}{{end}}</dd>
+<dt>Tool</dt><dd>{{.Tool}}</dd>
+<dt>Arguments</dt><dd><code>{{.Arguments}}</code></dd>
+<dt>Waiting since</dt><dd>{{.Age}}</dd></dl>
+<p><small>The line in bold was written by ha-airlock from the arguments, not by the application. The approval is for exactly this call, once.</small></p>
+<form method="post" action="action"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}">
+<button name="action" value="approve">Approve</button><button name="action" value="deny">Deny</button></form>
+</section>{{else}}<p>No action is waiting.</p>{{end}}
+<h2>Applications waiting for your approval</h2>
 {{range .Pending}}<section>
 <p class="code">{{.Code}}</p>
 <dl><dt>Application</dt><dd>{{.Client}}</dd>

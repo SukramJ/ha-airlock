@@ -75,6 +75,11 @@ MCP client
 | **R4 Files / YAML** | Read and write below `/config` behind a path allowlist | approval with diff and config check | blocked |
 | **Never** | Shell or code execution, user and token management, `secrets.yaml`, `.storage/auth*`, installing Apps from third-party repositories or HACS | — | — |
 
+As built, the default for R1 in the local profile is stricter than this
+table: every call needs approval, and the tools cover `light`, `switch`
+and `input_boolean` only (ADR 0005). The policy file can set the table's
+value.
+
 A profile is assigned to a client when the owner approves it; the server
 does not derive it from where a request comes from. The two profile columns
 are starting values. Everything can be narrowed in
