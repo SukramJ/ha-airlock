@@ -4,8 +4,9 @@ Status: accepted, 2026-11-13. The owner decided five points, named at the
 end of *Context*, and accepted the rest as proposed by the assistant.
 Built so far: step 1 of the order of building — the journal, the policy's
 part, the difference on the approval page, the gate's step for a change,
-the tools for `input_boolean` helpers, and undo in the sidebar page. Not
-built: everything from step 2 on. What was measured on
+the tools for `input_boolean` helpers, and undo in the sidebar page; of
+step 2 the other helper domains. Not built: areas, labels, the entity
+registry, and everything from step 3 on. What was measured on
 a running Home Assistant is under *Measured*. Every part is to be measured on a running Home Assistant before
 the next part is built on it; a measurement that contradicts this record
 amends it.
@@ -272,6 +273,19 @@ line by line. A dashboard has no label; where the other kinds say
 `label`, the policy file names the dashboards that can be changed, by
 their URL path, and names none by default. `all` releases every
 dashboard. No tool creates or deletes a dashboard.
+
+### A helper that holds a secret
+
+An `input_text` helper has a mode, `text` or `password`
+(`homeassistant/components/input_text/__init__.py:52-67`, Core
+3f8160ce7ff). In the password mode its text, and the initial text in its
+stored configuration, are meant to be a secret. No tool creates such a
+helper or sets that mode; `input_text_list` returns its entity without
+the configuration; a change or a deletion of it is refused before
+anything is put before the owner. A stored text helper without a
+readable mode counts as one in the password mode. This closes the stored
+configuration only: the state of such an entity is as readable through
+the tools that read states as any other state.
 
 ### Order of building
 

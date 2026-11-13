@@ -14,11 +14,29 @@ import (
 )
 
 // changeCases are the tools of tier R2.
-var changeCases = map[string]bool{
-	"input_boolean_create": true,
-	"input_boolean_update": true,
-	"input_boolean_delete": true,
+// helperCases gives, for every helper domain, the arguments of a creation
+// the domain accepts.
+var helperCases = map[string]string{
+	"input_boolean":  `{"name":"Movie night"}`,
+	"input_button":   `{"name":"Ring"}`,
+	"input_number":   `{"name":"Volume","min":0,"max":10}`,
+	"input_text":     `{"name":"Note","mode":"text"}`,
+	"input_select":   `{"name":"Mode","options":["home","away"]}`,
+	"input_datetime": `{"name":"Wake","has_time":true}`,
+	"counter":        `{"name":"Visits","maximum":null}`,
+	"timer":          `{"name":"Tea","duration":"0:05:00"}`,
 }
+
+// changeCases are the tools of tier R2: three for every helper domain.
+var changeCases = func() map[string]bool {
+	cases := map[string]bool{}
+	for domain := range helperCases {
+		for _, verb := range []string{"_create", "_update", "_delete"} {
+			cases[domain+verb] = true
+		}
+	}
+	return cases
+}()
 
 func TestChangeToolsAreExactlyTheDeclaredOnesAndChangeHelpers(t *testing.T) {
 	t.Parallel()
@@ -42,6 +60,8 @@ func TestChangeToolsAreExactlyTheDeclaredOnesAndChangeHelpers(t *testing.T) {
 // helperHome is a Home Assistant with toggle helpers: stored items, and the
 // registry entries of their entities. It records what it was sent.
 type helperHome struct {
+	// domain is the helpers' domain; input_boolean if empty.
+	domain   string
 	items    []map[string]any
 	registry []map[string]any
 	sent     []string
@@ -79,6 +99,11 @@ func (h *helperHome) Call(_ context.Context, command string, params, out any) er
 		}
 		return json.Unmarshal(encoded, out)
 	}
+	if h.domain != "" {
+		if rest, ok := strings.CutPrefix(command, h.domain+"/"); ok {
+			command = "input_boolean/" + rest
+		}
+	}
 	switch command {
 	case "input_boolean/list":
 		return answer(h.items)
@@ -96,7 +121,11 @@ func (h *helperHome) Call(_ context.Context, command string, params, out any) er
 		}
 		return errors.New("home assistant command failed: not_found: Entity not found")
 	case "input_boolean/create":
-		h.registry = append(h.registry, map[string]any{"entity_id": "input_boolean.movie_night", "platform": "input_boolean", "unique_id": "movie_night"})
+		domain := "input_boolean"
+		if h.domain != "" {
+			domain = h.domain
+		}
+		h.registry = append(h.registry, map[string]any{"entity_id": domain + ".movie_night", "platform": domain, "unique_id": "movie_night"})
 		return answer(map[string]any{"id": "movie_night", "name": "Movie night"})
 	case "input_boolean/update", "input_boolean/delete":
 		return answer(nil)
@@ -109,7 +138,7 @@ func (h *helperHome) Call(_ context.Context, command string, params, out any) er
 func (h *helperHome) writes() []string {
 	var out []string
 	for _, s := range h.sent {
-		if !strings.HasPrefix(s, "input_boolean/list") && !strings.HasPrefix(s, "config/entity_registry/list") &&
+		if !strings.Contains(strings.SplitN(s, " ", 2)[0], "/list") &&
 			!strings.HasPrefix(s, "config/entity_registry/get") {
 			out = append(out, s)
 		}
@@ -226,6 +255,7 @@ func TestHelperToolsRefuseWhatTheyDoNotDeclare(t *testing.T) {
 		{"name of the wrong type", "input_boolean_create", `{"name":7}`},
 		{"icon of the wrong shape", "input_boolean_create", `{"name":"x","icon":"<script>"}`},
 		{"initial not a boolean", "input_boolean_create", `{"name":"x","initial":"on"}`},
+		{"initial null", "input_boolean_create", `{"name":"x","initial":null}`},
 		{"unknown field", "input_boolean_create", `{"name":"x","labels":["airlock"]}`},
 		{"an entity id for a creation", "input_boolean_create", `{"name":"x","entity_id":"input_boolean.x"}`},
 		{"the item id chosen by the client", "input_boolean_update", `{"entity_id":"input_boolean.guests","name":"x","input_boolean_id":"party"}`},
@@ -300,5 +330,129 @@ func TestHelperToolsPlanTheWayBack(t *testing.T) {
 	}
 	if len(home.writes()) != 0 {
 		t.Errorf("wrote %v", home.writes())
+	}
+}
+
+// Every helper domain has the same four tools, and each reaches only its
+// own domain's commands: a creation sends the checked fields, a change and
+// a deletion name the stored item of the entity.
+func TestEveryHelperDomainPlansAndWritesInItsOwnDomain(t *testing.T) {
+	t.Parallel()
+	for domain, args := range helperCases {
+		home := newHelperHome()
+		home.domain = domain
+		// A stored text helper carries its mode; without it the helper
+		// counts as one that holds a secret.
+		home.items[0]["mode"] = "text"
+		entity := domain + ".guests"
+		home.registry = append(home.registry, map[string]any{"entity_id": entity, "platform": domain, "unique_id": "guest_mode", "name": nil, "original_name": "Guest mode"})
+		if _, ok := catalog.Lookup(domain + "_list"); !ok {
+			t.Errorf("%s: no list tool", domain)
+		}
+
+		change, err := plan(t, home, domain+"_create", args)
+		if err != nil || len(change.Before) != 0 || change.Left == nil {
+			t.Fatalf("%s: creation: %+v, %v", domain, change, err)
+		}
+		if got := home.writes(); len(got) != 0 {
+			t.Fatalf("%s: planning wrote %v", domain, got)
+		}
+		if _, _, err := change.Apply(context.Background(), home); err != nil {
+			t.Fatalf("%s: apply: %v", domain, err)
+		}
+		if got := home.writes(); len(got) != 1 || !strings.HasPrefix(got[0], domain+"/create {") {
+			t.Fatalf("%s: creation wrote %v", domain, got)
+		}
+
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(args), &fields); err != nil {
+			t.Fatal(err)
+		}
+		fields["entity_id"] = json.RawMessage(`"` + entity + `"`)
+		updated, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		home.sent = nil
+		change, err = plan(t, home, domain+"_update", string(updated))
+		if err != nil || change.Object != entity {
+			t.Fatalf("%s: change: %+v, %v", domain, change, err)
+		}
+		if _, _, err := change.Apply(context.Background(), home); err != nil {
+			t.Fatalf("%s: apply: %v", domain, err)
+		}
+		if got := home.writes(); len(got) != 1 || !strings.HasPrefix(got[0], domain+"/update {") || !strings.Contains(got[0], `"`+domain+`_id":"guest_mode"`) {
+			t.Fatalf("%s: change wrote %v", domain, got)
+		}
+
+		home.sent = nil
+		change, err = plan(t, home, domain+"_delete", `{"entity_id":"`+entity+`"}`)
+		if err != nil {
+			t.Fatalf("%s: deletion: %v", domain, err)
+		}
+		if _, _, err := change.Apply(context.Background(), home); err != nil {
+			t.Fatalf("%s: apply: %v", domain, err)
+		}
+		if got := home.writes(); len(got) != 1 || got[0] != domain+`/delete {"`+domain+`_id":"guest_mode"}` {
+			t.Fatalf("%s: deletion wrote %v", domain, got)
+		}
+	}
+}
+
+// The input schema names every field the domain requires, so a client
+// learns it before the call is refused.
+func TestInputSchemaRequiresWhatTheDomainRequires(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]string{
+		"input_number_create": `"required": ["name", "min", "max"]`,
+		"input_number_update": `"required": ["entity_id", "name", "min", "max"]`,
+		"input_select_create": `"required": ["name", "options"]`,
+		"timer_create":        `"required": ["name"]`,
+	} {
+		tool, _ := catalog.Lookup(name)
+		if !strings.Contains(string(tool.InputSchema), want) || !json.Valid(tool.InputSchema) {
+			t.Errorf("%s: schema lacks %s or is not JSON:\n%s", name, want, tool.InputSchema)
+		}
+	}
+}
+
+// A text helper in the password mode holds a secret: its configuration is
+// not returned, and it is neither changed nor deleted.
+func TestTextHelperThatHoldsASecretIsWithheldAndNotChanged(t *testing.T) {
+	t.Parallel()
+	home := newHelperHome()
+	home.domain = "input_text"
+	home.items = []map[string]any{
+		{"id": "door_code", "name": "Door code", "initial": "4711", "mode": "password"},
+		{"id": "note", "name": "Note", "initial": "milk", "mode": "text"},
+	}
+	home.registry = []map[string]any{
+		{"entity_id": "input_text.door_code", "platform": "input_text", "unique_id": "door_code", "name": nil, "original_name": "Door code"},
+		{"entity_id": "input_text.note", "platform": "input_text", "unique_id": "note", "name": nil, "original_name": "Note"},
+	}
+
+	tool, _ := catalog.Lookup("input_text_list")
+	out, err := tool.Handler(context.Background(), home, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out); strings.Contains(got, "4711") || strings.Contains(got, "Door code") ||
+		!strings.Contains(got, `{"entity_id":"input_text.door_code","withheld":"the helper holds a secret"}`) || !strings.Contains(got, `"initial":"milk"`) {
+		t.Fatalf("list = %s", got)
+	}
+	for _, call := range [][2]string{
+		{"input_text_update", `{"entity_id":"input_text.door_code","name":"Door code","mode":"text"}`},
+		{"input_text_delete", `{"entity_id":"input_text.door_code"}`},
+	} {
+		change, err := plan(t, home, call[0], call[1])
+		if err == nil || strings.Contains(err.Error(), "4711") || len(change.Before) != 0 {
+			t.Errorf("%s: planned %+v, %v", call[0], change, err)
+		}
+	}
+	if _, err := plan(t, home, "input_text_update", `{"entity_id":"input_text.note","name":"Note","mode":"text"}`); err != nil {
+		t.Errorf("a text helper without a secret: %v", err)
+	}
+	if got := home.writes(); len(got) != 0 {
+		t.Errorf("wrote %v", got)
 	}
 }

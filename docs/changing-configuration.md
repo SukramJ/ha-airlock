@@ -1,8 +1,13 @@
 # Letting an application change configuration
 
-An approved application can ask to create, change or delete toggle helpers
-(`input_boolean`). Nothing else of Home Assistant's configuration can be
-changed through ha-airlock today. A change never runs without your
+An approved application can ask to create, change or delete helpers:
+toggles (`input_boolean`), buttons (`input_button`), numbers
+(`input_number`), texts (`input_text`), dropdowns (`input_select`), dates
+and times (`input_datetime`), counters (`counter`) and timers (`timer`).
+Nothing else of Home Assistant's configuration can be changed through
+ha-airlock today. A text helper in the password mode holds a secret: its
+configuration is not shown to an application, it is neither changed nor
+deleted, and none is created. A change never runs without your
 approval, and you approve it looking at what is there now beside what is
 asked for.
 

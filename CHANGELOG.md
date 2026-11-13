@@ -122,6 +122,14 @@ All notable changes to ha-airlock are recorded here. The format follows
   test helper after the owner's approval. `docs/connecting-a-client.md`
   says how Claude Code is connected.
 
+- Helpers of seven more domains can be listed, created, changed and
+  deleted, on the terms of the toggle helpers: `input_button`,
+  `input_number`, `input_text`, `input_select`, `input_datetime`, `counter`
+  and `timer`. A text helper in the password mode is withheld: its
+  configuration is not returned, it is not changed or deleted, and none is
+  created. The input schema of a tool names every field its domain
+  requires.
+
 ### Fixed
 
 - A notification that an action waits no longer stays in Home Assistant
