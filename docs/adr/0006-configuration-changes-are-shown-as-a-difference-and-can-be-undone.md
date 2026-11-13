@@ -5,8 +5,8 @@ end of *Context*, and accepted the rest as proposed by the assistant.
 Built so far: step 1 of the order of building without undo — the journal,
 the policy's part, the difference on the approval page, the gate's step
 for a change, and the tools for `input_boolean` helpers. Not built: undo
-in the sidebar page, and everything from step 2 on. Not measured on a
-running Home Assistant yet. Every part is to be measured on a running Home Assistant before
+in the sidebar page, and everything from step 2 on. What was measured on
+a running Home Assistant is under *Measured*. Every part is to be measured on a running Home Assistant before
 the next part is built on it; a measurement that contradicts this record
 amends it.
 
@@ -341,9 +341,44 @@ before anything below them was measured.
   can change what an undo would restore; the same holds for the policy
   file.
 
+## Measured
+
+On the owner's instance (Core 2026.11.1, Supervisor 2026.11.0),
+2026-11-13, through ha-airlock 0.7.0-dev with Claude Code as the MCP
+client:
+
+- The Supervisor accepted `map: addon_config:ro`, and the App started. With
+  no file in the folder the log said `from_file=false`; after the owner
+  put `policy.json` there and restarted, `from_file=true`.
+- Without the policy file `input_boolean_create` was refused with "the
+  policy does not allow tier R2"; with it, the call was parked.
+- A creation that was not approved within five minutes created nothing:
+  the registry held the same helpers before and after.
+- After the approval the creation returned
+  `"created":"input_boolean.ha_airlock_change_test"` for the name
+  "ha-airlock change test". The entity was in the registry at the first
+  look, with the unique id `ha_airlock_change_test` and the label
+  `airlock`, which only ha-airlock can have set. The owner's other helpers
+  carried no label before and none after.
+- After its approval `input_boolean_update` left the stored item with the
+  new name and icon; entity id and label stayed.
+- After its approval `input_boolean_delete` removed the stored item and the
+  registry entry.
+- `input_boolean_list` returned the helpers with their entities.
+
+Read beside ha-airlock with an administrator's token: the registry and
+`input_boolean/list` after each step.
+
 ## Unverified
 
-Nothing in this record is measured. In particular:
+Not measured:
+
+- The sidebar page as the owner saw it. Each change was approved there,
+  so the request was shown; whether the table read as intended was not
+  reported.
+- The journal file on the instance; it is in the App's private data.
+- A change against an object that was altered after the approval, and a
+  failed write, on a running system.
 
 - That the HTTP configuration endpoints are a documented interface. The
   frontend uses them; `CLAUDE.md` asks for an ADR where a tool rests on an
@@ -354,7 +389,8 @@ Nothing in this record is measured. In particular:
   and scripts; it was not read.
 - Which identifier a helper, an area or an automation gets when it is
   created again after a deletion, and so whether an undo of a deletion
-  gives back the same entity id.
+  gives back the same entity id. For a new helper the id was the slug of
+  its name; a second creation with the same name was not tried.
 - What a reload after a write does to automations that are running.
 - That the check's reading of an action is the reading Core makes, for
   every action type. The check is to be written against Core's schemas
