@@ -2,8 +2,8 @@
 
 Status: accepted, 2026-11-13. The owner decided five points, named at the
 end of *Context*, and accepted the rest as proposed by the assistant.
-Built so far: the journal of changes (`internal/changes`), which nothing
-uses yet. Every part is to be measured on a running Home Assistant before
+Built so far: the journal of changes (`internal/changes`) and the
+policy's part (`internal/policy`), neither used by a tool yet. Every part is to be measured on a running Home Assistant before
 the next part is built on it; a measurement that contradicts this record
 amends it.
 
@@ -149,6 +149,14 @@ entities an automation, a script or a scene targets are released one by
 one, by the label, whatever the switch says; otherwise an automation
 would be the way to switch a lock that carries no label. For the same
 reason the entity registry has no `all`: its objects are the entities.
+
+In the file this is a `configuration` object beside `profiles`: per
+profile and kind — `helper`, `area`, `label`, `entity`, `scene`, `script`,
+`automation`, `dashboard` — a `change`, an optional `release`, and for
+dashboards the `objects`. A kind the file does not mention is denied, and
+so is every kind while the profile's tier R2 is. `entity` takes no
+`release` other than `label`; `label` takes none, since a label cannot
+carry one.
 
 The switches live in the policy file. The sidebar page shows what is in
 force and does not change it; a page that writes the policy is a later

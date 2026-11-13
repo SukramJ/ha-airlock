@@ -252,10 +252,19 @@ func TestPolicyDecidesEveryTierForEveryProfile(t *testing.T) {
 }
 
 // A tier the owner opens in the policy runs; this is the allow decision for
-// the tiers the default policy denies.
+// the tiers the default policy denies. Configuration, R2, cannot be opened
+// this way: the most a policy can say is approval, and then the call waits.
 func TestATierOpenedInThePolicyRuns(t *testing.T) {
 	t.Parallel()
 	for _, tier := range catalog.Tiers() {
+		if tier == catalog.R2 {
+			f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"remote":{"R2":"approval"}}}`))
+			out, err := f.gate.Call(context.Background(), &gate.Principal{Client: "c", Profile: policy.ProfileRemote}, "probe_R2", nil)
+			if err != nil || !out.Waiting || out.Allowed || f.runs[tier].Load() != 0 {
+				t.Errorf("R2 with approval: %v, outcome %+v, runs = %d", err, out, f.runs[tier].Load())
+			}
+			continue
+		}
 		f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"remote":{"`+string(tier)+`":"allow"}}}`))
 
 		out, err := f.gate.Call(context.Background(), &gate.Principal{Client: "c", Profile: policy.ProfileRemote}, "probe_"+string(tier), nil)
@@ -410,7 +419,7 @@ func TestEveryCatalogueToolIsDecidedByThePolicy(t *testing.T) {
 
 func TestEngagedKillSwitchRefusesEveryCallAndRecordsIt(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R0":"allow","R1":"allow","R2":"allow","R3":"allow","R4":"allow"}}}`))
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R0":"allow","R1":"allow","R2":"approval","R3":"allow","R4":"allow"}}}`))
 	f.halted.Store(true)
 
 	for _, tier := range catalog.Tiers() {

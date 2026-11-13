@@ -86,6 +86,12 @@ All notable changes to ha-airlock are recorded here. The format follows
   twenty seconds.
 - The approval page shows, beside a waiting action, the state its entity
   is in at that moment.
+- The policy file knows tier R2's rules, ahead of the tools: R2 cannot be
+  set to `allow`, and a `configuration` object switches each kind of
+  configuration on (`approval`) or off and says whether its objects are
+  released by the label or all (ADR 0006). No tool of tier R2 exists yet.
+- `internal/changes`: the journal a configuration change will be recorded
+  in before it is written. Nothing uses it yet.
 - ADR 0006: how configuration changes (tier R2) will work — a difference
   rendered by the server, an approval bound to the state it was shown
   against, a journal with undo in the sidebar page, a content check for
