@@ -93,6 +93,8 @@ All notable changes to ha-airlock are recorded here. The format follows
 - ADR 0006 records the first configuration changes on a real system: a
   toggle helper created, changed and deleted through ha-airlock, each
   after the owner's approval.
+- ADR 0006 records the first undo on a real system: a helper created
+  through ha-airlock was taken back by the owner in the sidebar page.
 - The first tools that change configuration (tier R2): `input_boolean_create`,
   `input_boolean_update` and `input_boolean_delete`, and the read-only
   `input_boolean_list`. They are off until the policy file opens the kind
