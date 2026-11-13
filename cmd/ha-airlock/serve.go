@@ -229,7 +229,11 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 		return nil, err
 	}
 	core := provision.NewCore(coreURL, cred)
-	approvals := approval.New(auditLog, approvalNotice(core, logger), env.now)
+	notice := approvalNotice(core, logger)
+	// Waiting requests are kept in memory only: after a restart none
+	// waits, and a notice left from before would point at nothing.
+	notice(ctx, false)
+	approvals := approval.New(auditLog, notice, env.now)
 	a.sweep = approvals.Sweep
 	consent, err := oauth.NewConsent(store, killSwitch, auditLog, approvals, entityStates{core}, logger)
 	if err != nil {

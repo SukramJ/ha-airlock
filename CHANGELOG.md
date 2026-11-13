@@ -93,6 +93,9 @@ All notable changes to ha-airlock are recorded here. The format follows
 
 ### Fixed
 
+- A notification that an action waits no longer stays in Home Assistant
+  after ha-airlock was restarted: waiting requests do not outlive a
+  restart, and the start takes the notification away.
 - The pages were not readable in a dark colour scheme: they set dark text
   and no background. Every page now sets its own background and colours
   for the light and for the dark scheme.
