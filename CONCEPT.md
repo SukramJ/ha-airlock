@@ -202,6 +202,10 @@ Assistant OS / Supervised).
   but not encrypted.
 - `tools_filesystem.py`, `tools_hacs.py` and `tools_code.py` exist; only the
   file names were read, not the code.
+- `homeassistant-addon/DOCS.md:366-380`: a web page switches single tools
+  and groups of tools on and off. `:313-336`: an option, off by default,
+  holds "high-stakes" tool calls until the user approves them in that
+  page, by per-tool rules. Only the documentation was read, not the code.
 
 **Measured — Home Assistant Core**, local checkout at `3f8160ce7ff`
 (2026-11-09), paths below `homeassistant/components/`:

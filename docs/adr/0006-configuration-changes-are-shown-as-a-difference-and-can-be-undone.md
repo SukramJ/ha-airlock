@@ -1,6 +1,6 @@
 # ADR 0006 — A configuration change is shown as a difference, bound to the state it was shown against, and can be undone
 
-Status: proposed, 2026-11-13. The owner decided three points, named at the
+Status: proposed, 2026-11-13. The owner decided five points, named at the
 end of *Context*; everything else is the assistant's proposal and waits
 for the owner's reading. Nothing of it is built. Every part is to be measured on a running Home Assistant before the next
 part is built on it; a measurement that contradicts this record amends it.
@@ -65,7 +65,9 @@ How Core takes configuration, all read at Core `3f8160ce7ff`:
   frontend `0eec83448a`).
 
 The owner decided on 2026-11-13: one record for all of R2; undo by a
-button in the sidebar page; deleting from the start, with approval. The
+button in the sidebar page; deleting from the start, with approval; a
+kind of configuration can be switched off as a whole and can be released
+as a whole; these switches are set in the policy file first. The
 assistant had recommended a first record for configuration that does not
 act, and a second one for automations after that was measured. The
 recommendation survives as the order of building, below.
@@ -128,6 +130,27 @@ changed or deleted only if it carries the label of ADR 0005: on its
 registry entry for helpers, automations, scripts and scenes, on the area
 for an area. The gate checks it before a change is parked and again
 before it runs.
+
+**The policy has two switches per kind.** The kinds are: helpers, areas,
+labels, the entity registry, scenes, scripts, automations, dashboards.
+For each kind and profile the policy file says
+
+- whether the kind can be changed at all: `deny` or `approval`. A kind
+  set to `deny` has no tool that runs, whatever the tier says;
+- which existing objects of the kind are released: `label`, the rule
+  above and the default, or `all`. With `all`, a change to any object of
+  the kind can be put before the owner; it still needs the approval, and
+  the journal still records it.
+
+`all` releases the objects of a kind, never what they act on. The
+entities an automation, a script or a scene targets are released one by
+one, by the label, whatever the switch says; otherwise an automation
+would be the way to switch a lock that carries no label. For the same
+reason the entity registry has no `all`: its objects are the entities.
+
+The switches live in the policy file. The sidebar page shows what is in
+force and does not change it; a page that writes the policy is a later
+decision.
 
 **What ha-airlock created, it labels.** After a creation ran, the server
 puts the release label on the new object, so that the client can correct
@@ -214,9 +237,10 @@ declares a command.
 ### Dashboards
 
 One dashboard's content is replaced as a whole, with the difference shown
-line by line. A dashboard has no label; the policy file names the
-dashboards that can be changed, by their URL path, and names none by
-default. No tool creates or deletes a dashboard.
+line by line. A dashboard has no label; where the other kinds say
+`label`, the policy file names the dashboards that can be changed, by
+their URL path, and names none by default. `all` releases every
+dashboard. No tool creates or deletes a dashboard.
 
 ### Order of building
 
@@ -253,8 +277,14 @@ names, before the next begins.
 
 **Better than the comparison targets?** `CONCEPT.md` §8 records that
 ha-mcp treats the client as trusted and that Core's `mcp_server` has no
-approval step. Neither was read again for this record; what they do with
-configuration is unverified here. What can be said without them: a
+approval step. ha-mcp's documentation, read for this record at `aab8f38f`,
+describes switches for single tools and for groups of tools, and an
+optional approval of held calls that is off by default
+(`homeassistant-addon/DOCS.md:313-336`, `:366-380`); its code was not
+read, and what either does with configuration is unverified here. The
+two switches per kind above take up what ha-mcp's group switches give the
+owner, and add the release of single objects, which its documentation
+does not describe. What can be said without the comparison: a
 difference rendered by the server, an approval that does not survive a
 change of the object, and an undo the client cannot reach are each a
 property of this design, and none depends on the model behaving.
