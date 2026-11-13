@@ -195,6 +195,7 @@ ha-airlock/
 │   ├── audit/           — the audit log: hash-chained JSON lines, verification
 │   ├── build/           — version
 │   ├── catalog/         — the static tool catalogue: every tool, its tier, its endpoints
+│   ├── changes/         — the journal of configuration changes: the state before and after, kept for undo (ADR 0006)
 │   ├── gate/            — the one enforcement point: identity, policy, tool, redaction, audit
 │   ├── halt/            — the kill switch: one persistent flag the gate obeys
 │   ├── hacore/          — client for Core's WebSocket API (hacoretest: its stand-in for tests)
