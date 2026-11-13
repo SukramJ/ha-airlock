@@ -30,8 +30,8 @@ Assistant App: one container beside Core.
   the consent page through Ingress and, behind the owner's HTTPS reverse
   proxy, the OAuth 2.1 authorization server and the MCP endpoint. Every
   tool call passes `internal/gate`. The catalogue holds five read-only tools (R0);
-  `docs/tools.md` is generated from it. Not built: approval of actions, any tier above
-  R0, the audit view in the UI. Other
+  `docs/tools.md` is generated from it. The sidebar page shows the audit
+  log. Not built: approval of actions, any tier above R0. Other
   commands: `probe`, `provision`, `audit verify`.
 
 Every tool call passes one chain, in this order:

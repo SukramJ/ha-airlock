@@ -323,3 +323,123 @@ func TestAppendRejectsAnEntryTooLargeToReadBack(t *testing.T) {
 		t.Fatalf("records = %d, want 1", summary.Records)
 	}
 }
+
+// openLog opens a log with n entries and keeps it open, as the server does.
+func openLog(t *testing.T, n int) (log *audit.Log, path string) {
+	t.Helper()
+	path = writeLog(t, n)
+	log, err := audit.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	return log, path
+}
+
+func seqs(records []audit.Record) []uint64 {
+	out := make([]uint64, 0, len(records))
+	for i := range records {
+		out = append(out, records[i].Seq)
+	}
+	return out
+}
+
+func TestReadReturnsTheNewestRecordsFirstAndPagesBackwards(t *testing.T) {
+	t.Parallel()
+	log, _ := openLog(t, 7)
+
+	page, err := log.Read(context.Background(), 0, 3)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got := fmt.Sprint(seqs(page.Records)); got != "[7 6 5]" || page.Verified != 7 {
+		t.Fatalf("newest page = %s, verified %d; want [7 6 5], 7", got, page.Verified)
+	}
+	if r := page.Records[0]; r.Tool != "tool_6" || r.Client != "client-a" || r.Time.IsZero() || len(r.Hash) != 64 {
+		t.Fatalf("record = %+v, want the entry as it was appended", r)
+	}
+
+	older, err := log.Read(context.Background(), 5, 3)
+	if err != nil {
+		t.Fatalf("read older: %v", err)
+	}
+	if got := fmt.Sprint(seqs(older.Records)); got != "[4 3 2]" {
+		t.Fatalf("older page = %s, want [4 3 2]", got)
+	}
+	last, err := log.Read(context.Background(), 2, 3)
+	if err != nil {
+		t.Fatalf("read last: %v", err)
+	}
+	if got := fmt.Sprint(seqs(last.Records)); got != "[1]" {
+		t.Fatalf("last page = %s, want [1]", got)
+	}
+}
+
+func TestReadSeesWhatWasAppendedSinceTheLogWasOpened(t *testing.T) {
+	t.Parallel()
+	log, _ := openLog(t, 1)
+	if _, err := log.Append(context.Background(), audit.Entry{Event: "kill_switch"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	page, err := log.Read(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got := fmt.Sprint(seqs(page.Records)); got != "[2 1]" || page.Records[0].Event != "kill_switch" {
+		t.Fatalf("page = %s %q, want [2 1] with the new entry first", got, page.Records[0].Event)
+	}
+}
+
+// What Verify cannot see in a file alone, a running server can: it knows the
+// last line it wrote.
+func TestReadDetectsLinesCutOffTheEndWhileTheServerRuns(t *testing.T) {
+	t.Parallel()
+	log, path := openLog(t, 3)
+	writeLines(t, path, readLines(t, path)[:2])
+
+	page, err := log.Read(context.Background(), 0, 10)
+	if !errors.Is(err, audit.ErrBroken) {
+		t.Fatalf("read error = %v, want ErrBroken", err)
+	}
+	if got := fmt.Sprint(seqs(page.Records)); got != "[2 1]" || page.Verified != 2 {
+		t.Fatalf("page = %s, verified %d; want the two lines that are left", got, page.Verified)
+	}
+}
+
+func TestReadDetectsAChangedEntryAndReturnsTheRecordsBeforeIt(t *testing.T) {
+	t.Parallel()
+	log, path := openLog(t, 3)
+	lines := readLines(t, path)
+	lines[1] = strings.Replace(lines[1], "client-a", "client-b", 1)
+	writeLines(t, path, lines)
+
+	page, err := log.Read(context.Background(), 0, 10)
+	if !errors.Is(err, audit.ErrBroken) || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("read error = %v, want ErrBroken at line 2", err)
+	}
+	if got := fmt.Sprint(seqs(page.Records)); got != "[1]" || page.Verified != 1 {
+		t.Fatalf("page = %s, verified %d; want only the line before the break", got, page.Verified)
+	}
+}
+
+func TestReadHonoursACancelledContext(t *testing.T) {
+	t.Parallel()
+	log, _ := openLog(t, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := log.Read(ctx, 0, 10); !errors.Is(err, context.Canceled) {
+		t.Fatalf("read error = %v, want context.Canceled", err)
+	}
+}
+
+func TestReadBoundsThePageSize(t *testing.T) {
+	t.Parallel()
+	log, _ := openLog(t, 3)
+	page, err := log.Read(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(page.Records) != 1 {
+		t.Fatalf("records = %d, want 1 for a limit below one", len(page.Records))
+	}
+}

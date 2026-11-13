@@ -64,6 +64,11 @@ All notable changes to ha-airlock are recorded here. The format follows
   a restart.
 - A limit of tool calls per minute and client, 60 for the `local` profile
   and 30 for `remote`, adjustable with `limits` in `policy.json`.
+- The audit log in Home Assistant: the ha-airlock page links to a view of
+  the records, newest first, for administrators. Opening it checks the
+  whole chain and compares the end of the file with the last line the
+  server wrote, so lines cut off the end are reported while the server
+  runs. See `docs/audit-log.md`.
 
 ### Changed
 

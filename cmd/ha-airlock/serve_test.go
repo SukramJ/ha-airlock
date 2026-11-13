@@ -473,3 +473,33 @@ func TestKillSwitchEngagedInTheSidebarStopsAnApprovedClient(t *testing.T) {
 		t.Fatalf("tool result after release: %s", text)
 	}
 }
+
+// The audit view on the server as main builds it: the page shows the log
+// the gate writes to, and only through the Supervisor.
+func TestAuditViewInTheSidebarShowsTheServedToolCall(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`"}`)
+	accessToken := r.authorize(t, "local")
+	if _, isError := r.callTool(t, accessToken, "system_log_list"); isError {
+		t.Fatal("the tool call failed")
+	}
+
+	got := r.asAdmin(t, http.MethodGet, "/audit", nil)
+
+	if got.status != http.StatusOK {
+		t.Fatalf("audit view: status %d", got.status)
+	}
+	for _, want := range []string{"provisioning", "client_approved", "system_log_list", "allow", "The chain holds"} {
+		if !strings.Contains(got.body, want) {
+			t.Errorf("the audit view lacks %q:\n%s", want, got.body)
+		}
+	}
+	if strings.Contains(got.body, accessToken) || strings.Contains(got.body, credentialInLog) {
+		t.Fatal("the audit view shows a credential")
+	}
+
+	other := startServer(t, `{"public_url":"`+publicURL+`"}`, netip.MustParseAddr("172.30.32.2"))
+	if got := other.asAdmin(t, http.MethodGet, "/audit", nil); got.status != http.StatusForbidden {
+		t.Fatalf("audit view for a peer that is not the Supervisor: status %d, want 403", got.status)
+	}
+}

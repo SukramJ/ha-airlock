@@ -10,9 +10,11 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/policy"
 )
 
@@ -32,6 +34,7 @@ const (
 type Consent struct {
 	store  *Store
 	halt   KillSwitch
+	audit  Journal
 	csrf   string
 	logger *slog.Logger
 }
@@ -42,19 +45,26 @@ type KillSwitch interface {
 	Set(ctx context.Context, engage bool, by string) error
 }
 
-// NewConsent returns the consent page over a store and the kill switch.
-func NewConsent(store *Store, killSwitch KillSwitch, logger *slog.Logger) (*Consent, error) {
+// Journal is the audit log the page shows.
+type Journal interface {
+	Read(ctx context.Context, before uint64, limit int) (audit.Page, error)
+}
+
+// NewConsent returns the consent page over a store, the kill switch and the
+// audit log.
+func NewConsent(store *Store, killSwitch KillSwitch, journal Journal, logger *slog.Logger) (*Consent, error) {
 	csrf, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
-	return &Consent{store: store, halt: killSwitch, csrf: csrf, logger: logger}, nil
+	return &Consent{store: store, halt: killSwitch, audit: journal, csrf: csrf, logger: logger}, nil
 }
 
 // Register adds the consent page to mux. The paths are relative to the
 // address Ingress gives the App.
 func (c *Consent) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", c.page)
+	mux.HandleFunc("GET /audit", c.auditPage)
 	mux.HandleFunc("POST /decide", c.decide)
 	mux.HandleFunc("POST /revoke", c.revoke)
 	mux.HandleFunc("POST /halt", c.setHalt)
@@ -117,14 +127,87 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 			Created: g.CreatedAt.Format("2006-01-02 15:04"), LastUsed: g.LastUsed.Format("2006-01-02 15:04"),
 		})
 	}
+	c.write(w, r, consentPage, view)
+}
+
+// write sends one of the pages. Nothing on them comes from anywhere but
+// this server: no script, no image, no frame.
+func (c *Consent) write(w http.ResponseWriter, r *http.Request, page *template.Template, view any) { // any: each page has its own view struct
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'")
 	h.Set("Content-Type", "text/html; charset=utf-8")
-	if err := consentPage.Execute(w, view); err != nil {
-		c.logger.WarnContext(r.Context(), "consent page could not be written", slog.Any("error", err))
+	if err := page.Execute(w, view); err != nil {
+		c.logger.WarnContext(r.Context(), "page could not be written", slog.Any("error", err))
 	}
+}
+
+const (
+	// auditPageSize is the number of records one audit page shows.
+	auditPageSize = 100
+	// auditArgumentsShown bounds the arguments shown for one record; the
+	// file holds them in full.
+	auditArgumentsShown = 400
+)
+
+// auditPage shows the audit log, newest record first. The log holds what
+// clients sent and what Home Assistant answered; the template escapes all
+// of it.
+func (c *Consent) auditPage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := administrator(r); !ok {
+		http.Error(w, "Only a Home Assistant administrator can manage ha-airlock.", http.StatusForbidden)
+		return
+	}
+	var before uint64
+	if raw := r.URL.Query().Get("before"); raw != "" {
+		n, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			http.Error(w, "That is not a record number.", http.StatusBadRequest)
+			return
+		}
+		before = n
+	}
+	type recordView struct {
+		Seq                                                                  uint64
+		Time, Event, Client, Tool, Decision, Approver, Result, Arguments, MS string
+	}
+	view := struct {
+		Records  []recordView
+		Verified uint64
+		Broken   string
+		Older    uint64
+		Paged    bool
+	}{Paged: before != 0}
+	page, err := c.audit.Read(r.Context(), before, auditPageSize)
+	switch {
+	case errors.Is(err, audit.ErrBroken):
+		view.Broken = err.Error()
+	case err != nil:
+		c.logger.ErrorContext(r.Context(), "audit log could not be read", slog.Any("error", err))
+		http.Error(w, "The audit log could not be read.", http.StatusInternalServerError)
+		return
+	}
+	view.Verified = page.Verified
+	for i := range page.Records {
+		rec := &page.Records[i]
+		args := string(rec.Arguments)
+		if len(args) > auditArgumentsShown {
+			args = strings.ToValidUTF8(args[:auditArgumentsShown], "") + " …"
+		}
+		v := recordView{
+			Seq: rec.Seq, Time: rec.Time.UTC().Format("2006-01-02 15:04:05"), Event: rec.Event, Client: rec.Client, Tool: rec.Tool,
+			Decision: rec.Decision, Approver: rec.Approver, Result: rec.Result, Arguments: args,
+		}
+		if rec.DurationMS > 0 {
+			v.MS = strconv.FormatInt(rec.DurationMS, 10) + " ms"
+		}
+		view.Records = append(view.Records, v)
+	}
+	if n := len(page.Records); n == auditPageSize && page.Records[n-1].Seq > 1 {
+		view.Older = page.Records[n-1].Seq
+	}
+	c.write(w, r, auditPage, view)
 }
 
 // checked reports whether a POST comes from an administrator and from the
@@ -204,7 +287,7 @@ section{border:1px solid #ccc;border-radius:.5rem;padding:1rem;margin:1rem 0}.co
 .warn{color:#a40000}.msg{background:#eef;padding:.6rem 1rem;border-radius:.5rem}button{font-size:1rem;padding:.4rem .9rem;margin-right:.5rem}
 dt{font-weight:600}dd{margin:0 0 .4rem 0}small{color:#555}</style></head><body>
 <h1>ha-airlock</h1>
-<p><a href="./">Reload</a></p>
+<p><a href="./">Reload</a> · <a href="audit">Audit log</a></p>
 {{if .Message}}<p class="msg">{{.Message}}</p>{{end}}
 <section><h2>Kill switch</h2>
 {{if .Halted}}<p class="warn"><strong>ha-airlock is halted.</strong> Every tool call is refused.</p>
@@ -229,4 +312,22 @@ dt{font-weight:600}dd{margin:0 0 .4rem 0}small{color:#555}</style></head><body>
 <dt>Profile</dt><dd>{{.Profile}}</dd><dt>Approved</dt><dd>{{.Created}}</dd><dt>Last used</dt><dd>{{.LastUsed}}</dd></dl>
 <form method="post" action="revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="grant" value="{{.ID}}">
 <button>Revoke access</button></form></section>{{else}}<p>No application is approved.</p>{{end}}
+</body></html>`))
+
+var auditPage = template.Must(template.New("audit").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ha-airlock — audit log</title>
+<style>body{font-family:system-ui,sans-serif;margin:2rem auto;padding:0 1rem;line-height:1.4;max-width:80rem}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:.3rem .6rem;border-bottom:1px solid #ccc}
+td{overflow-wrap:anywhere}code{font-size:.85rem}.warn{color:#a40000}.ok{color:#1a6b1a}small{color:#555}</style></head><body>
+<h1>Audit log</h1>
+<p><a href="./">Back</a> · <a href="audit">Newest</a></p>
+{{if .Broken}}<p class="warn"><strong>The audit log is not intact.</strong> {{.Broken}}. The records below are the ones before the break.</p>
+{{else}}<p class="ok">The chain holds for all {{.Verified}} records, and the file ends with the last line this server wrote.</p>{{end}}
+<p><small>Times are UTC. Arguments are shown as recorded, after redaction, and shortened here; the file holds them in full.</small></p>
+<table><thead><tr><th>#</th><th>Time</th><th>Event</th><th>Application</th><th>Tool</th><th>Decision</th><th>Result</th></tr></thead><tbody>
+{{range .Records}}<tr><td>{{.Seq}}</td><td>{{.Time}}</td><td>{{.Event}}</td><td>{{.Client}}{{if .Approver}}<br><small>by {{.Approver}}</small>{{end}}</td>
+<td>{{.Tool}}{{if .Arguments}}<br><code>{{.Arguments}}</code>{{end}}</td><td>{{.Decision}}</td><td>{{.Result}}{{if .MS}}<br><small>{{.MS}}</small>{{end}}</td></tr>
+{{else}}<tr><td colspan="7">{{if .Paged}}No older record.{{else}}Nothing is recorded yet.{{end}}</td></tr>{{end}}
+</tbody></table>
+{{if .Older}}<p><a href="audit?before={{.Older}}">Older records</a></p>{{end}}
 </body></html>`))
