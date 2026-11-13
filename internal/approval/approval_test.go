@@ -372,3 +372,55 @@ func TestNotifyIsToldWhenSomethingStartsToWaitAndWhenNothingWaitsAnyMore(t *test
 		t.Fatalf("a sweep with nothing to do told something: %s", got)
 	}
 }
+
+// An approval for a change is bound to the state the owner was shown: the
+// same call against another state has another key, and neither is the key
+// of the call without a state.
+func TestKeyBoundToAStateDiffersByState(t *testing.T) {
+	t.Parallel()
+	args := json.RawMessage(`{"entity_id":"input_boolean.guest","name":"Guests"}`)
+	key := func(state string) string {
+		t.Helper()
+		k, err := approval.KeyBoundTo("client", "input_boolean_update", args, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	plain, err := approval.Key("client", "input_boolean_update", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, again := key("aaa"), key("aaa")
+	if first != again || first == key("aab") || first == plain || key("") == plain {
+		t.Fatalf("keys: %s %s %s %s", first, key("aab"), key(""), plain)
+	}
+	if _, err := approval.KeyBoundTo("client", "tool", json.RawMessage(`{"a":`), "aaa"); err == nil {
+		t.Fatal("arguments that are not JSON got a key")
+	}
+}
+
+// What the owner is shown is what was parked: the caller cannot change the
+// difference afterwards, and neither can a reader of the list.
+func TestParkedDifferenceCannotBeChangedFromOutside(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	req := &approval.Request{
+		Key: "k", Client: "client", Tool: "input_boolean_update", Summary: "Change helper input_boolean.guest",
+		Change: &approval.Difference{
+			Kind: "helper", Object: "input_boolean.guest", Name: "Guests",
+			Before: json.RawMessage(`{"name":"Guests"}`), After: json.RawMessage(`{"name":"Visitors"}`),
+		},
+	}
+	if status, _, err := f.store.Resolve(context.Background(), req); err != nil || status != approval.Waiting {
+		t.Fatalf("park: %d, %v", status, err)
+	}
+	req.Change.After[9] = 'X'
+	req.Change.Object = "input_boolean.other"
+	f.store.Pending()[0].Change.Before[9] = 'X'
+
+	got := f.store.Pending()[0].Change
+	if got == nil || got.Object != "input_boolean.guest" || string(got.Before) != `{"name":"Guests"}` || string(got.After) != `{"name":"Visitors"}` {
+		t.Fatalf("the parked difference = %+v", got)
+	}
+}

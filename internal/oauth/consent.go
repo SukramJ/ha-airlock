@@ -4,12 +4,15 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -131,6 +134,7 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 	type actionView struct {
 		ID, Client, ClientHost, Tool, Summary, Arguments, Age string
 		Entities                                              []entityView
+		Change                                                *changeView
 	}
 	view := struct {
 		CSRF, Message string
@@ -158,6 +162,9 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 			state, known := states[e.ID]
 			v.Entities = append(v.Entities, entityView{ID: e.ID, Name: e.Name, State: state, Known: known})
 		}
+		if a.Change != nil {
+			v.Change = viewOf(a.Change)
+		}
 		view.Actions = append(view.Actions, v)
 	}
 	pending := c.store.PendingRequests()
@@ -178,6 +185,80 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 		})
 	}
 	c.write(w, r, consentPage, view)
+}
+
+// changeView is a configuration change as the page shows it.
+type changeView struct {
+	Kind, Object, Name, Note string
+	// Creation and Deletion say that one of the two states is absent.
+	Creation, Deletion bool
+	Rows               []changeRow
+}
+
+// changeRow is one field of the object, before and after.
+type changeRow struct {
+	Field, Before, After string
+	// InBefore and InAfter say whether the state has the field at all.
+	InBefore, InAfter bool
+	Changed           bool
+}
+
+// viewOf lays a difference out field by field. Two states that are JSON
+// objects are compared key by key; anything else is one row. Every value
+// is shown as the JSON it is, so that a string cannot pass for a number or
+// for nothing.
+func viewOf(d *approval.Difference) *changeView {
+	v := &changeView{
+		Kind: d.Kind, Object: d.Object, Name: d.Name, Note: d.Note,
+		Creation: len(d.Before) == 0, Deletion: len(d.After) == 0,
+	}
+	before, beforeIsObject := fieldsOf(d.Before)
+	after, afterIsObject := fieldsOf(d.After)
+	if !beforeIsObject || !afterIsObject {
+		v.Rows = []changeRow{{
+			Field: "value", Before: string(d.Before), After: string(d.After),
+			InBefore: !v.Creation, InAfter: !v.Deletion, Changed: !bytes.Equal(d.Before, d.After),
+		}}
+		return v
+	}
+	names := make([]string, 0, len(before)+len(after))
+	for name := range before {
+		names = append(names, name)
+	}
+	for name := range after {
+		if _, ok := before[name]; !ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b, inBefore := before[name]
+		a, inAfter := after[name]
+		v.Rows = append(v.Rows, changeRow{
+			Field: name, Before: string(b), After: string(a), InBefore: inBefore, InAfter: inAfter,
+			Changed: inBefore != inAfter || !bytes.Equal(b, a),
+		})
+	}
+	return v
+}
+
+// fieldsOf returns the fields of a state that is a JSON object, each value
+// in compact form. An absent state has no fields and counts as an object.
+func fieldsOf(state json.RawMessage) (map[string]json.RawMessage, bool) {
+	if len(state) == 0 {
+		return nil, true
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(state, &fields); err != nil || fields == nil {
+		return nil, false
+	}
+	for name, value := range fields {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, value); err == nil {
+			fields[name] = compact.Bytes()
+		}
+	}
+	return fields, true
 }
 
 // statesOf reads the present state of every entity the waiting actions act
@@ -380,7 +461,9 @@ var consentPage = template.Must(template.New("consent").Parse(`<!doctype html><h
 <style>` + colours + `body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.5}
 section{border:1px solid var(--line);border-radius:.5rem;padding:1rem;margin:1rem 0}.code{font-size:1.6rem;letter-spacing:.15em;font-weight:600}
 .msg{background:var(--note);padding:.6rem 1rem;border-radius:.5rem}button{font-size:1rem;padding:.4rem .9rem;margin-right:.5rem}
-dt{font-weight:600}dd{margin:0 0 .4rem 0}</style></head><body>
+dt{font-weight:600}dd{margin:0 0 .4rem 0}table{border-collapse:collapse;width:100%;margin:.5rem 0}
+th,td{border:1px solid var(--line);padding:.25rem .5rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+tr.changed td{background:var(--note)}</style></head><body>
 <h1>ha-airlock</h1>
 <p><a href="./">Reload</a> · <a href="audit">Audit log</a></p>
 {{if .Message}}<p class="msg">{{.Message}}</p>{{end}}
@@ -394,10 +477,15 @@ dt{font-weight:600}dd{margin:0 0 .4rem 0}</style></head><body>
 {{range .Actions}}<section>
 <p><strong>{{.Summary}}</strong></p>
 <dl>{{range .Entities}}<dt>Entity</dt><dd>{{.ID}}{{if .Name}} — {{.Name}}{{end}}</dd><dt>State now</dt><dd>{{if .Known}}{{.State}}{{else}}not known{{end}}</dd>{{end}}
+{{with .Change}}<dt>{{if .Creation}}Creates{{else if .Deletion}}Deletes{{else}}Changes{{end}}</dt><dd>{{.Kind}}{{if .Object}} {{.Object}}{{end}}{{if .Name}} — {{.Name}}{{end}}</dd>{{end}}
 <dt>Requested by</dt><dd>{{if .Client}}{{.Client}} ({{.ClientHost}}){{else}}{{.ClientHost}}{{end}}</dd>
 <dt>Tool</dt><dd>{{.Tool}}</dd>
 <dt>Arguments</dt><dd><code>{{.Arguments}}</code></dd>
 <dt>Waiting since</dt><dd>{{.Age}}</dd></dl>
+{{with .Change}}<table><tr><th>Field</th><th>{{if .Creation}}—{{else}}Now{{end}}</th><th>{{if .Deletion}}—{{else}}After{{end}}</th></tr>
+{{range .Rows}}<tr{{if .Changed}} class="changed"{{end}}><td>{{.Field}}</td><td>{{if .InBefore}}<code>{{.Before}}</code>{{end}}</td><td>{{if .InAfter}}<code>{{.After}}</code>{{end}}</td></tr>
+{{end}}</table>
+<p><small>{{if .Creation}}This object is new: every value in the table was chosen by the application. {{else}}The column "Now" was read from Home Assistant by ha-airlock{{if not .Deletion}}; the column "After" is what the application asks for{{end}}. If the object changes before the call runs, the approval does not apply. {{end}}{{.Note}}</small></p>{{end}}
 <p><small>The line in bold was written by ha-airlock from the arguments, not by the application. The approval is for exactly this call, once.</small></p>
 <form method="post" action="action"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}">
 <button name="action" value="approve">Approve</button><button name="action" value="deny">Deny</button></form>
