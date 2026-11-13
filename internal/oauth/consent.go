@@ -4,6 +4,7 @@
 package oauth
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"html/template"
@@ -30,17 +31,24 @@ const (
 // Supervisor: the listener it is mounted on accepts no other peer.
 type Consent struct {
 	store  *Store
+	halt   KillSwitch
 	csrf   string
 	logger *slog.Logger
 }
 
-// NewConsent returns the consent page over a store.
-func NewConsent(store *Store, logger *slog.Logger) (*Consent, error) {
+// KillSwitch is the switch the page shows and operates.
+type KillSwitch interface {
+	Engaged() bool
+	Set(ctx context.Context, engage bool, by string) error
+}
+
+// NewConsent returns the consent page over a store and the kill switch.
+func NewConsent(store *Store, killSwitch KillSwitch, logger *slog.Logger) (*Consent, error) {
 	csrf, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
-	return &Consent{store: store, csrf: csrf, logger: logger}, nil
+	return &Consent{store: store, halt: killSwitch, csrf: csrf, logger: logger}, nil
 }
 
 // Register adds the consent page to mux. The paths are relative to the
@@ -49,6 +57,7 @@ func (c *Consent) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", c.page)
 	mux.HandleFunc("POST /decide", c.decide)
 	mux.HandleFunc("POST /revoke", c.revoke)
+	mux.HandleFunc("POST /halt", c.setHalt)
 }
 
 // administrator returns the Home Assistant user behind a request, if the
@@ -85,10 +94,11 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 	}
 	view := struct {
 		CSRF, Message string
+		Halted        bool
 		Pending       []pendingView
 		Grants        []grantView
 		Profiles      []string
-	}{CSRF: c.csrf, Message: message, Profiles: []string{policy.ProfileLocal, policy.ProfileRemote}}
+	}{CSRF: c.csrf, Message: message, Halted: c.halt.Engaged(), Profiles: []string{policy.ProfileLocal, policy.ProfileRemote}}
 	now := time.Now()
 	pending := c.store.PendingRequests()
 	for i := range pending {
@@ -157,6 +167,24 @@ func (c *Consent) decide(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (c *Consent) setHalt(w http.ResponseWriter, r *http.Request) {
+	userID, ok := c.checked(w, r)
+	if !ok {
+		return
+	}
+	engage := r.PostForm.Get("action") == "engage"
+	if err := c.halt.Set(r.Context(), engage, userID); err != nil {
+		c.logger.ErrorContext(r.Context(), "kill switch", slog.Any("error", err))
+		c.render(w, r, "The kill switch reported a problem: "+err.Error())
+		return
+	}
+	if engage {
+		c.render(w, r, "Halted. No tool runs until you release the kill switch.")
+		return
+	}
+	c.render(w, r, "Released. Tools run again.")
+}
+
 func (c *Consent) revoke(w http.ResponseWriter, r *http.Request) {
 	userID, ok := c.checked(w, r)
 	if !ok {
@@ -178,6 +206,12 @@ dt{font-weight:600}dd{margin:0 0 .4rem 0}small{color:#555}</style></head><body>
 <h1>ha-airlock</h1>
 <p><a href="./">Reload</a></p>
 {{if .Message}}<p class="msg">{{.Message}}</p>{{end}}
+<section><h2>Kill switch</h2>
+{{if .Halted}}<p class="warn"><strong>ha-airlock is halted.</strong> Every tool call is refused.</p>
+<form method="post" action="halt"><input type="hidden" name="csrf" value="{{.CSRF}}"><button name="action" value="release">Release</button></form>
+{{else}}<p>Tools run for approved applications, as the policy allows.</p>
+<form method="post" action="halt"><input type="hidden" name="csrf" value="{{.CSRF}}"><button name="action" value="engage">Halt all tool calls</button></form>{{end}}
+</section>
 <h2>Waiting for your approval</h2>
 {{range .Pending}}<section>
 <p class="code">{{.Code}}</p>

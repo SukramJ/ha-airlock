@@ -23,6 +23,7 @@ import (
 	"github.com/SukramJ/ha-airlock/internal/build"
 	"github.com/SukramJ/ha-airlock/internal/catalog"
 	"github.com/SukramJ/ha-airlock/internal/gate"
+	"github.com/SukramJ/ha-airlock/internal/halt"
 	"github.com/SukramJ/ha-airlock/internal/mcpserver"
 	"github.com/SukramJ/ha-airlock/internal/oauth"
 	"github.com/SukramJ/ha-airlock/internal/policy"
@@ -160,7 +161,11 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	if err != nil {
 		return nil, err
 	}
-	consent, err := oauth.NewConsent(store, logger)
+	killSwitch, err := halt.Open(filepath.Join(env.dataDir, "halted"), auditLog)
+	if err != nil {
+		return nil, err
+	}
+	consent, err := oauth.NewConsent(store, killSwitch, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +191,10 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	}
 
 	tools := catalog.All()
-	g := gate.New(pol, auditLog, provision.NewCore(coreURL, cred), tools, toolTimeout)
+	g := gate.New(gate.Config{
+		Policy: pol, Audit: auditLog, Core: provision.NewCore(coreURL, cred), Tools: tools,
+		Timeout: toolTimeout, Halted: killSwitch.Engaged,
+	})
 	authz := oauth.NewServer(store, env.clientMetadata, opts.PublicURL, logger)
 	publicMux := http.NewServeMux()
 	authz.Register(publicMux)

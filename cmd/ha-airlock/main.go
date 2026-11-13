@@ -92,6 +92,14 @@ func run(ctx context.Context, args []string, env environment, stdout io.Writer) 
 		return exitOK
 	}
 
+	if args[0] == "tools" {
+		// Plain output, not log lines: this is the published tools page.
+		if err := writeToolsDoc(stdout); err != nil {
+			return exitFailed
+		}
+		return exitOK
+	}
+
 	logger := slog.New(slog.NewTextHandler(stdout, nil))
 	switch args[0] {
 	case "probe":

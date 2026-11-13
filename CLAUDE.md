@@ -29,9 +29,9 @@ Assistant App: one container beside Core.
   App's container runs: it provisions its own Home Assistant user, serves
   the consent page through Ingress and, behind the owner's HTTPS reverse
   proxy, the OAuth 2.1 authorization server and the MCP endpoint. Every
-  tool call passes `internal/gate`. The catalogue holds one tool,
-  `system_log_list` (R0). Not built: approval of actions, any tier above
-  R0, rate limits, the kill switch, the audit view in the UI. Other
+  tool call passes `internal/gate`. The catalogue holds five read-only tools (R0);
+  `docs/tools.md` is generated from it. Not built: approval of actions, any tier above
+  R0, the audit view in the UI. Other
   commands: `probe`, `provision`, `audit verify`.
 
 Every tool call passes one chain, in this order:
@@ -191,6 +191,7 @@ ha-airlock/
 │   ├── build/           — version
 │   ├── catalog/         — the static tool catalogue: every tool, its tier, its endpoints
 │   ├── gate/            — the one enforcement point: identity, policy, tool, redaction, audit
+│   ├── halt/            — the kill switch: one persistent flag the gate obeys
 │   ├── hacore/          — client for Core's WebSocket API (hacoretest: its stand-in for tests)
 │   ├── mcpserver/       — the catalogue over MCP; every call goes to the gate
 │   ├── oauth/           — the authorization server (ADR 0004) and the consent page

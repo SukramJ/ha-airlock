@@ -431,3 +431,45 @@ func TestPublicListenerStaysClosedWithoutAUsablePublicURL(t *testing.T) {
 		}
 	}
 }
+
+// The kill switch as the owner operates it, on the server as main builds
+// it: once engaged in the sidebar page, an approved client's call is
+// refused and recorded, and the switch survives in the data directory.
+func TestKillSwitchEngagedInTheSidebarStopsAnApprovedClient(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`"}`)
+	accessToken := r.authorize(t, "local")
+	token := formTokenRE.FindStringSubmatch(r.asAdmin(t, http.MethodGet, "/", nil).body)
+	if token == nil {
+		t.Fatal("the sidebar page has no form token")
+	}
+
+	if got := r.asAdmin(t, http.MethodPost, "/halt", url.Values{"csrf": {token[1]}, "action": {"engage"}}); got.status != http.StatusOK {
+		t.Fatalf("engage: status %d", got.status)
+	}
+	text, isError := r.callTool(t, accessToken, "system_log_list")
+
+	if !isError || !strings.Contains(text, "halted") {
+		t.Fatalf("tool result while halted: isError = %t, %s", isError, text)
+	}
+	r.home.Mu.Lock()
+	reached := len(r.home.CoreCommands)
+	r.home.Mu.Unlock()
+	if reached != 0 {
+		t.Fatal("Home Assistant was reached while the kill switch was engaged")
+	}
+	audited := r.auditText(t)
+	if !strings.Contains(audited, `"event":"kill_switch"`) || !strings.Contains(audited, `"decision":"halted"`) {
+		t.Fatalf("audit log:\n%s", audited)
+	}
+	if _, err := os.Stat(filepath.Join(r.dataDir, "halted")); err != nil {
+		t.Fatalf("the engaged switch is not stored: %v", err)
+	}
+
+	if got := r.asAdmin(t, http.MethodPost, "/halt", url.Values{"csrf": {token[1]}, "action": {"release"}}); got.status != http.StatusOK {
+		t.Fatalf("release: status %d", got.status)
+	}
+	if text, isError := r.callTool(t, accessToken, "system_log_list"); isError {
+		t.Fatalf("tool result after release: %s", text)
+	}
+}

@@ -37,25 +37,47 @@ const (
 // version is the only file format this build reads.
 const version = 1
 
-// Policy maps each profile to its decision per tier.
+// Limits on how many tool calls a client of a profile may make per minute,
+// used when the policy file sets none, and the bounds a file may set.
+const (
+	defaultLocalCallsPerMinute  = 60
+	defaultRemoteCallsPerMinute = 30
+	maxCallsPerMinute           = 6000
+)
+
+// Policy maps each profile to its decision per tier and to its call limit.
 type Policy struct {
 	profiles map[string]map[catalog.Tier]Decision
+	limits   map[string]int
+}
+
+func defaultLimits() map[string]int {
+	return map[string]int{ProfileLocal: defaultLocalCallsPerMinute, ProfileRemote: defaultRemoteCallsPerMinute}
 }
 
 // Default is the policy in force when the owner has written none: the local
 // profile may read and diagnose, and nothing else is allowed. The remote
 // profile is denied everything until its stricter redaction exists.
 func Default() Policy {
-	return Policy{profiles: map[string]map[catalog.Tier]Decision{
-		ProfileLocal:  {catalog.R0: Allow},
-		ProfileRemote: {},
-	}}
+	return Policy{
+		profiles: map[string]map[catalog.Tier]Decision{
+			ProfileLocal:  {catalog.R0: Allow},
+			ProfileRemote: {},
+		},
+		limits: defaultLimits(),
+	}
 }
 
 // file is the policy as the owner writes it.
 type file struct {
 	Version  int                          `json:"version"`
 	Profiles map[string]map[string]string `json:"profiles"`
+	Limits   map[string]limit             `json:"limits"`
+}
+
+// limit is what the file may say about one profile's quantity limits.
+type limit struct {
+	CallsPerMinute int `json:"calls_per_minute"`
 }
 
 // Parse reads a policy file. It rejects what it does not know — a key, a
@@ -79,7 +101,16 @@ func Parse(data []byte) (Policy, error) {
 	for _, tier := range catalog.Tiers() {
 		known[tier] = true
 	}
-	p := Policy{profiles: map[string]map[catalog.Tier]Decision{}}
+	p := Policy{profiles: map[string]map[catalog.Tier]Decision{}, limits: defaultLimits()}
+	for profile, l := range f.Limits {
+		if profile != ProfileLocal && profile != ProfileRemote {
+			return Policy{}, fmt.Errorf("policy: limits: unknown profile %q", profile)
+		}
+		if l.CallsPerMinute < 1 || l.CallsPerMinute > maxCallsPerMinute {
+			return Policy{}, fmt.Errorf("policy: limits: profile %q: calls_per_minute must be between 1 and %d", profile, maxCallsPerMinute)
+		}
+		p.limits[profile] = l.CallsPerMinute
+	}
 	for profile, tiers := range f.Profiles {
 		if profile != ProfileLocal && profile != ProfileRemote {
 			return Policy{}, fmt.Errorf("policy: unknown profile %q", profile)
@@ -107,4 +138,14 @@ func (p Policy) Decide(profile string, tier catalog.Tier) Decision {
 		return Allow
 	}
 	return Deny
+}
+
+// CallsPerMinute returns how many tool calls a client of the profile may
+// make per minute. A profile the policy does not know gets the stricter of
+// the defaults; it is denied every tier anyway.
+func (p Policy) CallsPerMinute(profile string) int {
+	if n, ok := p.limits[profile]; ok {
+		return n
+	}
+	return defaultRemoteCallsPerMinute
 }

@@ -244,3 +244,20 @@ func TestProvisionCommandStopsAtAUserItDidNotCreate(t *testing.T) {
 		t.Fatalf("users created: %v", home.Created)
 	}
 }
+
+// docs/tools.md is what "ha-airlock tools" prints: the published list and
+// the catalogue cannot drift apart.
+func TestPublishedToolsListMatchesTheCatalogue(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	if code := run(context.Background(), []string{"tools"}, environment{}, &out); code != exitOK {
+		t.Fatalf("exit code = %d", code)
+	}
+	published, err := os.ReadFile(filepath.Join("..", "..", "docs", "tools.md"))
+	if err != nil {
+		t.Fatalf("read docs/tools.md: %v", err)
+	}
+	if out.String() != string(published) {
+		t.Fatal("docs/tools.md differs from the catalogue; regenerate it with: go run ./cmd/ha-airlock tools > docs/tools.md")
+	}
+}

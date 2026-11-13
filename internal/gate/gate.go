@@ -3,7 +3,8 @@
 
 // Package gate is the one enforcement point. Every tool call passes Call,
 // in this order: the caller's identity, the policy, the tool, redaction,
-// the audit log. No tool reaches Home Assistant around the policy, and no
+// the audit log. Before the policy come the kill switch and the client's
+// call limit. No tool reaches Home Assistant around the policy, and no
 // result leaves around redaction and the audit record.
 package gate
 
@@ -13,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/SukramJ/ha-airlock/internal/audit"
@@ -50,6 +52,19 @@ type Outcome struct {
 	Message string
 }
 
+// Config is what a gate is built from.
+type Config struct {
+	Policy policy.Policy
+	Audit  Appender
+	Core   catalog.Core
+	Tools  []catalog.Tool
+	// Timeout bounds one tool's work.
+	Timeout time.Duration
+	// Halted reports whether the kill switch is engaged. Nil means there is
+	// no switch.
+	Halted func() bool
+}
+
 // Gate holds what a call is checked against.
 type Gate struct {
 	policy  policy.Policy
@@ -57,16 +72,55 @@ type Gate struct {
 	core    catalog.Core
 	tools   map[string]catalog.Tool
 	timeout time.Duration
+	halted  func() bool
 	now     func() time.Time
+
+	mu      sync.Mutex
+	buckets map[string]*bucket
 }
 
-// New returns a gate over the given catalogue.
-func New(pol policy.Policy, log Appender, core catalog.Core, tools []catalog.Tool, timeout time.Duration) *Gate {
-	byName := make(map[string]catalog.Tool, len(tools))
-	for _, tool := range tools {
+// bucket is one client's allowance of calls: it holds at most a minute's
+// worth and refills evenly.
+type bucket struct {
+	tokens float64
+	last   time.Time
+}
+
+// New returns a gate.
+func New(cfg Config) *Gate {
+	byName := make(map[string]catalog.Tool, len(cfg.Tools))
+	for _, tool := range cfg.Tools {
 		byName[tool.Name] = tool
 	}
-	return &Gate{policy: pol, audit: log, core: core, tools: byName, timeout: timeout, now: time.Now}
+	halted := cfg.Halted
+	if halted == nil {
+		halted = func() bool { return false }
+	}
+	return &Gate{
+		policy: cfg.Policy, audit: cfg.Audit, core: cfg.Core, tools: byName, timeout: cfg.Timeout,
+		halted: halted, now: time.Now, buckets: map[string]*bucket{},
+	}
+}
+
+// take uses one call of the client's allowance and reports whether there
+// was one left.
+func (g *Gate) take(principal *Principal) bool {
+	perMinute := float64(g.policy.CallsPerMinute(principal.Profile))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.now()
+	b, ok := g.buckets[principal.Client]
+	if !ok {
+		b = &bucket{tokens: perMinute, last: now}
+		g.buckets[principal.Client] = b
+	}
+	b.tokens = min(perMinute, b.tokens+now.Sub(b.last).Minutes()*perMinute)
+	b.last = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
 }
 
 // Call runs one tool call through the chain. It returns an error only when
@@ -95,6 +149,17 @@ func (g *Gate) decideAndRun(ctx context.Context, principal *Principal, toolName 
 		return Outcome{Message: "the caller is not authenticated"}
 	}
 	entry.Client = principal.Client
+
+	if g.halted() {
+		entry.Decision, entry.Result = "halted", "refused"
+		return Outcome{Message: "ha-airlock is halted by its kill switch; no tool runs until an administrator releases it"}
+	}
+	// Every call counts against the allowance, refused ones too: a client
+	// cannot fill the audit log faster than its limit.
+	if !g.take(principal) {
+		entry.Decision, entry.Result = "rate_limited", "refused"
+		return Outcome{Message: "too many calls; try again in a moment"}
+	}
 
 	tool, ok := g.tools[toolName]
 	if !ok {

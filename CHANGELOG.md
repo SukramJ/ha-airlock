@@ -55,6 +55,15 @@ All notable changes to ha-airlock are recorded here. The format follows
     hashes, rotating refresh tokens.
   - `internal/mcpserver`: the catalogue over MCP, Streamable HTTP.
   See `docs/connecting-a-client.md`.
+- Four more read-only tools: `repairs_list_issues`, `config_entries_list`,
+  `trace_list`, `logbook_events`.
+- `ha-airlock tools` prints the list of tools from the catalogue;
+  `docs/tools.md` is its output, and a test fails when they differ.
+- The kill switch (`internal/halt`): one button in the sidebar page makes
+  the gate refuse every tool call until it is released; the state survives
+  a restart.
+- A limit of tool calls per minute and client, 60 for the `local` profile
+  and 30 for `remote`, adjustable with `limits` in `policy.json`.
 
 ### Changed
 

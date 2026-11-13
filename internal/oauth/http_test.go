@@ -35,6 +35,21 @@ type web struct {
 	consent *httptest.Server
 	server  *oauth.Server
 	client  *http.Client
+	halt    *fakeSwitch
+}
+
+// fakeSwitch is a kill switch that remembers who operated it.
+type fakeSwitch struct {
+	engaged bool
+	by      []string
+}
+
+func (f *fakeSwitch) Engaged() bool { return f.engaged }
+
+func (f *fakeSwitch) Set(_ context.Context, engage bool, by string) error {
+	f.engaged = engage
+	f.by = append(f.by, by)
+	return nil
 }
 
 func newWeb(t *testing.T) *web {
@@ -48,7 +63,8 @@ func newWeb(t *testing.T) *web {
 	w.server = oauth.NewServer(w.store, fakeFetcher{}, w.public.URL, logger)
 	w.server.Register(publicMux)
 
-	consent, err := oauth.NewConsent(w.store, logger)
+	w.halt = &fakeSwitch{}
+	consent, err := oauth.NewConsent(w.store, w.halt, logger)
 	if err != nil {
 		t.Fatalf("consent: %v", err)
 	}
@@ -426,5 +442,34 @@ func TestRevokingOnTheConsentPageEndsAccess(t *testing.T) {
 	}
 	if _, err := w.server.Verifier()(context.Background(), tokens.AccessToken, nil); err == nil {
 		t.Fatal("the access token works after revocation")
+	}
+}
+
+func TestKillSwitchIsOperatedFromTheConsentPageByAnAdministrator(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	token := w.csrf(t)
+
+	resp, body := w.asAdmin(t, http.MethodPost, "/halt", url.Values{"csrf": {token}, "action": {"engage"}})
+	if resp.status != http.StatusOK || !w.halt.engaged || !strings.Contains(body, "ha-airlock is halted") {
+		t.Fatalf("engage: status %d, engaged %t", resp.status, w.halt.engaged)
+	}
+	resp, body = w.asAdmin(t, http.MethodPost, "/halt", url.Values{"csrf": {token}, "action": {"release"}})
+	if resp.status != http.StatusOK || w.halt.engaged || strings.Contains(body, "ha-airlock is halted") {
+		t.Fatalf("release: status %d, engaged %t", resp.status, w.halt.engaged)
+	}
+	if len(w.halt.by) != 2 || w.halt.by[0] != admin {
+		t.Fatalf("operated by %v", w.halt.by)
+	}
+
+	// Not an administrator, and an administrator without the page's token.
+	if resp, _ := w.consentRequest(t, http.MethodPost, "/halt", url.Values{"csrf": {token}, "action": {"engage"}}, "some-user", "system-users"); resp.status != http.StatusForbidden {
+		t.Errorf("non-administrator: status %d, want 403", resp.status)
+	}
+	if resp, _ := w.asAdmin(t, http.MethodPost, "/halt", url.Values{"csrf": {"wrong"}, "action": {"engage"}}); resp.status != http.StatusForbidden {
+		t.Errorf("forged form: status %d, want 403", resp.status)
+	}
+	if w.halt.engaged {
+		t.Fatal("the kill switch was operated without authority")
 	}
 }
