@@ -21,6 +21,7 @@ import (
 
 	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
+	"github.com/SukramJ/ha-airlock/internal/changes"
 	"github.com/SukramJ/ha-airlock/internal/oauth"
 	"github.com/SukramJ/ha-airlock/internal/policy"
 )
@@ -44,6 +45,22 @@ type web struct {
 	halt    *fakeSwitch
 	actions *approval.Store
 	states  *fakeStates
+	made    *fakeChanges
+}
+
+// fakeChanges is a journal with what it was given, and remembers what it
+// was asked to undo.
+type fakeChanges struct {
+	list   []changes.Change
+	undone []string
+	err    error
+}
+
+func (f *fakeChanges) List() []changes.Change { return f.list }
+
+func (f *fakeChanges) Undo(_ context.Context, id, by string) error {
+	f.undone = append(f.undone, id+" by "+by)
+	return f.err
 }
 
 // fakeStates answers with the states it was given, or fails.
@@ -89,7 +106,8 @@ func newWeb(t *testing.T) *web {
 	w.halt = &fakeSwitch{}
 	w.actions = approval.New(w.auditLog, nil, time.Now)
 	w.states = &fakeStates{states: map[string]string{}}
-	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, w.actions, w.states, logger)
+	w.made = &fakeChanges{}
+	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, w.actions, w.states, w.made, logger)
 	if err != nil {
 		t.Fatalf("consent: %v", err)
 	}
@@ -774,6 +792,61 @@ func TestCreationAndDeletionAreShownAsSuch(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the page lacks %q", want)
 		}
+	}
+}
+
+// The page lists the changes that were made and lets an administrator, and
+// nobody else, take back one that was made and not taken back yet.
+func TestMadeChangesAreListedAndUndoneByAnAdministratorOnly(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	w.tokens(t, policy.ProfileLocal)
+	if _, body := w.asAdmin(t, http.MethodGet, "/", nil); !strings.Contains(body, "No configuration was changed through ha-airlock.") {
+		t.Fatal("an empty journal is not shown as such")
+	}
+	at := time.Date(2026, 11, 13, 9, 30, 0, 0, time.UTC)
+	w.made.list = []changes.Change{
+		{ID: "c3", Time: at, Client: clientID, Tool: "input_boolean_update", Kind: "helper", Object: "input_boolean.guest", Before: json.RawMessage(`{"name":"<b>Old</b>"}`), After: json.RawMessage(`{"name":"New"}`)},
+		{ID: "c2", Time: at, Client: clientID, Tool: "input_boolean_create", Kind: "helper", Object: "input_boolean.x", After: json.RawMessage(`{"name":"X"}`), Undone: &changes.Undo{By: admin, Time: at}},
+		{ID: "c1", Time: at, Client: clientID, Tool: "input_boolean_delete", Kind: "helper", Object: "input_boolean.y", Before: json.RawMessage(`{"name":"Y"}`), Failed: "home assistant <refused>"},
+	}
+
+	_, body := w.asAdmin(t, http.MethodGet, "/", nil)
+	for _, want := range []string{
+		"<strong>Changed helper input_boolean.guest</strong>", "<dd>2026-11-13 09:30</dd>", "<dd>input_boolean_update</dd>",
+		`<tr class="changed"><td>name</td><td><code>&#34;&lt;b&gt;Old&lt;/b&gt;&#34;</code></td><td><code>&#34;New&#34;</code></td></tr>`,
+		"<strong>Created helper input_boolean.x</strong>", "— undone 2026-11-13 09:30",
+		"<strong>Deleted helper input_boolean.y</strong>", "— not made: home assistant &lt;refused&gt;",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page lacks %q", want)
+		}
+	}
+	// Only the change that was made and not taken back has the button.
+	if n := strings.Count(body, `action="undo"`); n != 1 || !strings.Contains(body, `name="id" value="c3"`) {
+		t.Fatalf("%d undo forms on the page, want one, for c3", n)
+	}
+
+	token := w.csrf(t)
+	if resp, _ := w.asAdmin(t, http.MethodPost, "/undo", url.Values{"csrf": {"not-the-token"}, "id": {"c3"}}); resp.status != http.StatusForbidden {
+		t.Errorf("forged form: status %d, want 403", resp.status)
+	}
+	if resp, _ := w.consentRequest(t, http.MethodPost, "/undo", url.Values{"csrf": {token}, "id": {"c3"}}, "some-user", "system-users"); resp.status != http.StatusForbidden {
+		t.Errorf("non-administrator: status %d, want 403", resp.status)
+	}
+	if len(w.made.undone) != 0 {
+		t.Fatalf("a change was undone without an administrator's own form: %v", w.made.undone)
+	}
+
+	resp, body := w.asAdmin(t, http.MethodPost, "/undo", url.Values{"csrf": {w.csrf(t)}, "id": {"c3"}})
+	if resp.status != http.StatusOK || !strings.Contains(body, "Undone. The object is as it was before the change.") ||
+		len(w.made.undone) != 1 || w.made.undone[0] != "c3 by "+admin {
+		t.Fatalf("undo: %d, undone %v", resp.status, w.made.undone)
+	}
+
+	w.made.err = errors.New("the object has <changed> since; nothing was undone")
+	if _, body := w.asAdmin(t, http.MethodPost, "/undo", url.Values{"csrf": {w.csrf(t)}, "id": {"c3"}}); !strings.Contains(body, "Not undone: the object has &lt;changed&gt; since; nothing was undone") {
+		t.Fatalf("a refused undo is not reported:\n%s", body)
 	}
 }
 

@@ -84,6 +84,12 @@ type Tool struct {
 	// neither Act nor Handler: it changes something only through its plan.
 	Kind Kind
 	Plan func(ctx context.Context, core Core, args json.RawMessage) (Change, error)
+	// Revert plans the change that takes back one this tool made: object
+	// is what was changed, before and after are the states the journal
+	// holds. It reads what is there now, like Plan; the change it returns
+	// has that as Before and the journal's state before as After. Every
+	// tool of R2 has it.
+	Revert func(ctx context.Context, core Core, object string, before, after json.RawMessage) (Change, error)
 }
 
 // Change is what one call of a tool of tier R2 would change, stated by the

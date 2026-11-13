@@ -65,8 +65,10 @@ To change this, put a file `policy.json` into the App's configuration
 folder. Home Assistant keeps one such folder per App, beside its own
 configuration and outside the App's private data; the Supervisor creates
 it when ha-airlock starts and includes it in backups. Apps that edit
-files — the file editor, Samba, the SSH App — show it under the App
-folders, in a folder whose name ends in `ha_airlock`. ha-airlock itself
+files — the file editor, Samba, the SSH App — show it as
+`/addon_configs/<id>_ha_airlock`, where the id belongs to the App
+repository; installed from this repository's address it is
+`/addon_configs/816cd011_ha_airlock`. ha-airlock itself
 can only read it. The file is read when ha-airlock starts, so restart the
 App after changing it.
 

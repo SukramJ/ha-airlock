@@ -72,7 +72,22 @@ type Approvals interface {
 type Journal interface {
 	Record(ctx context.Context, change changes.Change) (changes.Change, error)
 	Settle(ctx context.Context, id, object, failed string) error
+	Get(id string) (changes.Change, bool)
+	MarkUndone(ctx context.Context, id, by string) error
 }
+
+// What an undo can answer beside the journal's own errors.
+var (
+	// ErrChangedSince reports that the object is no longer as the change
+	// left it. Writing the earlier state back would undo someone else's
+	// work, so nothing is written.
+	ErrChangedSince = errors.New("the object has changed since; nothing was undone")
+	// ErrNotMade reports a change whose write failed: there is nothing to
+	// take back.
+	ErrNotMade = errors.New("the change was not made; there is nothing to undo")
+	// ErrNoUndo reports a change this server cannot take back.
+	ErrNoUndo = errors.New("this change cannot be undone by this server")
+)
 
 // Config is what a gate is built from.
 type Config struct {
@@ -282,7 +297,7 @@ func finish(result json.RawMessage, entry *audit.Entry) Outcome {
 // the journal; the change itself. A creation is given the control label
 // afterwards, here and nowhere else.
 func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *catalog.Tool, args json.RawMessage, entry *audit.Entry) Outcome {
-	if tool.Plan == nil || tool.Kind == "" || tool.Act != nil || tool.Handler != nil {
+	if tool.Plan == nil || tool.Revert == nil || tool.Kind == "" || tool.Act != nil || tool.Handler != nil {
 		entry.Decision, entry.Result = "undeclared_change", "refused"
 		return Outcome{Message: "the tool does not declare what it changes"}
 	}
@@ -302,7 +317,7 @@ func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *c
 		entry.Result = "error: " + message
 		return Outcome{Message: message}
 	}
-	creation := len(plan.Before) == 0
+	creation, labelled := len(plan.Before) == 0, false
 	switch {
 	case plan.Apply == nil, creation && len(plan.After) == 0, !creation && plan.Entity == "":
 		entry.Decision, entry.Result = "undeclared_change", "refused"
@@ -320,14 +335,17 @@ func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *c
 	case creation:
 		request.Change.Note = fmt.Sprintf("ha-airlock will put the label %q on the new object: the application can then "+
 			"ask to change it again, each time with your approval.", g.policy.ControlLabel())
-	case kind.Release == policy.ReleaseLabel:
+	default:
+		// Whether the object carries the label is read in any case: the
+		// journal notes it, for an undo. It decides only where the kind is
+		// released by the label.
 		entities, refusal := g.released(runCtx, []string{plan.Entity})
-		if refusal != "" {
+		if refusal != "" && kind.Release == policy.ReleaseLabel {
 			entry.Decision, entry.Result = "not_released", "refused: "+refusal
 			return Outcome{Message: fmt.Sprintf("this object is not released for change; the owner releases it by giving it "+
 				"the label %q in Home Assistant", g.policy.ControlLabel())}
 		}
-		request.Entities = entities
+		request.Entities, labelled = entities, refusal == ""
 	}
 
 	before, err := changes.Hash(plan.Before)
@@ -350,7 +368,7 @@ func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *c
 	if outcome, approved := g.approval(ctx, &request, key, entry); !approved {
 		return outcome
 	}
-	outcome := g.write(ctx, runCtx, principal, tool, &plan, entry)
+	outcome := g.write(ctx, runCtx, principal, tool, &plan, labelled, entry)
 	if outcome.Output != nil {
 		entry.Result += fmt.Sprintf(", before %s, after %s", before, after)
 	}
@@ -359,12 +377,12 @@ func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *c
 
 // write makes an approved change: the journal first, then Home Assistant,
 // then the label for what was created.
-func (g *Gate) write(ctx, runCtx context.Context, principal *Principal, tool *catalog.Tool, plan *catalog.Change, entry *audit.Entry) Outcome {
+func (g *Gate) write(ctx, runCtx context.Context, principal *Principal, tool *catalog.Tool, plan *catalog.Change, released bool, entry *audit.Entry) Outcome {
 	// On record first: a change that cannot be undone from the journal is
 	// not made. The record is written even if the caller has gone away.
 	recorded, err := g.journal.Record(context.WithoutCancel(ctx), changes.Change{
 		Client: principal.Client, Tool: tool.Name, Kind: string(tool.Kind), Object: plan.Object,
-		Before: plan.Before, After: plan.After,
+		Before: plan.Before, After: plan.After, Released: released,
 	})
 	if err != nil {
 		entry.Result = "refused: the change could not be recorded in the journal"
@@ -389,6 +407,73 @@ func (g *Gate) write(ctx, runCtx context.Context, principal *Principal, tool *ca
 	outcome := finish(result, entry)
 	entry.Result += labelled + "; change " + recorded.ID
 	return outcome
+}
+
+// Undo takes a recorded change back, for the administrator by. It is not a
+// tool call: no client can reach it, and it asks neither the policy nor for
+// an approval. It writes only if the object is still as the change left
+// it, and what it did is an audit record.
+func (g *Gate) Undo(ctx context.Context, id, by string) error {
+	if g.journal == nil {
+		return ErrNoUndo
+	}
+	change, ok := g.journal.Get(id)
+	switch {
+	case !ok:
+		return changes.ErrUnknown
+	case change.Failed != "":
+		return ErrNotMade
+	case change.Undone != nil:
+		return changes.ErrUndone
+	}
+	tool, ok := g.tools[change.Tool]
+	if !ok || tool.Revert == nil {
+		return ErrNoUndo
+	}
+	runCtx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+
+	entry := audit.Entry{Event: "change_undone", Client: change.Client, Tool: change.Tool, Decision: "undo", Approver: by}
+	fail := func(result string, err error) error {
+		entry.Result = result
+		if _, auditErr := g.audit.Append(context.WithoutCancel(ctx), entry); auditErr != nil {
+			return fmt.Errorf("%w; and the attempt could not be recorded: %w", err, auditErr)
+		}
+		return err
+	}
+	plan, err := tool.Revert(runCtx, g.core, change.Object, change.Before, change.After)
+	if err != nil {
+		message, _ := redact.String(err.Error())
+		return fail("not undone: "+message, fmt.Errorf("%w: %s", ErrChangedSince, message))
+	}
+	present, err := changes.Hash(plan.Before)
+	if err != nil {
+		return fail("not undone: the present state could not be read", ErrChangedSince)
+	}
+	left, err := changes.Hash(change.After)
+	if err != nil || present != left || plan.Apply == nil {
+		return fail("not undone: change "+change.ID+": the object has changed since", ErrChangedSince)
+	}
+	object, _, err := plan.Apply(runCtx, g.core)
+	if err != nil {
+		message, _ := redact.String(err.Error())
+		return fail("error: "+message, errors.New(message))
+	}
+	note := ""
+	// A deleted object that carried the control label gets it back.
+	if len(change.After) == 0 && change.Released {
+		if err := g.label(runCtx, object); err != nil {
+			note = "; the control label could not be set on " + object
+		}
+	}
+	if err := g.journal.MarkUndone(context.WithoutCancel(ctx), id, by); err != nil {
+		note += "; the journal could not note the undo"
+	}
+	entry.Result = "ok: change " + change.ID + " undone, object " + object + note
+	if _, err := g.audit.Append(context.WithoutCancel(ctx), entry); err != nil {
+		return fmt.Errorf("the change was undone, but that could not be recorded: %w", err)
+	}
+	return nil
 }
 
 // label puts the control label on an object ha-airlock created, beside the

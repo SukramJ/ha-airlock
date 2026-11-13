@@ -19,6 +19,7 @@ import (
 
 	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
+	"github.com/SukramJ/ha-airlock/internal/changes"
 	"github.com/SukramJ/ha-airlock/internal/policy"
 )
 
@@ -41,6 +42,7 @@ type Consent struct {
 	audit  Journal
 	action Actions
 	states States
+	change Changes
 	csrf   string
 	logger *slog.Logger
 }
@@ -68,6 +70,16 @@ type States interface {
 	States(ctx context.Context, ids []string) (map[string]string, error)
 }
 
+// Changes are the configuration changes that were made, and the way to
+// take one back.
+type Changes interface {
+	List() []changes.Change
+	Undo(ctx context.Context, id, by string) error
+}
+
+// changesShown is how many of the newest changes the page lists.
+const changesShown = 20
+
 // statesTimeout bounds how long the page waits for the states it shows
 // beside a waiting action.
 const statesTimeout = 5 * time.Second
@@ -75,12 +87,14 @@ const statesTimeout = 5 * time.Second
 // NewConsent returns the consent page over a store, the kill switch, the
 // audit log, the waiting actions and the states of the entities they act
 // on.
-func NewConsent(store *Store, killSwitch KillSwitch, journal Journal, actions Actions, states States, logger *slog.Logger) (*Consent, error) {
+func NewConsent(
+	store *Store, killSwitch KillSwitch, journal Journal, actions Actions, states States, made Changes, logger *slog.Logger,
+) (*Consent, error) {
 	csrf, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
-	return &Consent{store: store, halt: killSwitch, audit: journal, action: actions, states: states, csrf: csrf, logger: logger}, nil
+	return &Consent{store: store, halt: killSwitch, audit: journal, action: actions, states: states, change: made, csrf: csrf, logger: logger}, nil
 }
 
 // Register adds the consent page to mux. The paths are relative to the
@@ -92,6 +106,7 @@ func (c *Consent) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /revoke", c.revoke)
 	mux.HandleFunc("POST /halt", c.setHalt)
 	mux.HandleFunc("POST /action", c.decideAction)
+	mux.HandleFunc("POST /undo", c.undo)
 }
 
 // administrator returns the Home Assistant user behind a request, if the
@@ -140,6 +155,7 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 		CSRF, Message string
 		Halted        bool
 		Actions       []actionView
+		Changes       []madeView
 		Pending       []pendingView
 		Grants        []grantView
 		Profiles      []string
@@ -167,6 +183,21 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 		}
 		view.Actions = append(view.Actions, v)
 	}
+	made := c.change.List()
+	if len(made) > changesShown {
+		made = made[:changesShown]
+	}
+	for i := range made {
+		m := &made[i]
+		v := madeView{
+			ID: m.ID, When: m.Time.Format("2006-01-02 15:04"), Client: names[m.Client], ClientHost: hostOf(m.Client), Tool: m.Tool,
+			Failed: m.Failed, Change: viewOf(&approval.Difference{Kind: m.Kind, Object: m.Object, Before: m.Before, After: m.After}),
+		}
+		if m.Undone != nil {
+			v.Undone = m.Undone.Time.Format("2006-01-02 15:04")
+		}
+		view.Changes = append(view.Changes, v)
+	}
 	pending := c.store.PendingRequests()
 	for i := range pending {
 		p := &pending[i]
@@ -185,6 +216,15 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 		})
 	}
 	c.write(w, r, consentPage, view)
+}
+
+// madeView is a change from the journal as the page lists it.
+type madeView struct {
+	ID, When, Client, ClientHost, Tool string
+	// Failed says why the write did not happen; Undone when it was taken
+	// back. A change with neither can be undone.
+	Failed, Undone string
+	Change         *changeView
 }
 
 // changeView is a configuration change as the page shows it.
@@ -426,6 +466,22 @@ func (c *Consent) decideAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// undo takes a configuration change back. Whether the object is still as
+// the change left it is checked when this is asked, not when the page was
+// drawn.
+func (c *Consent) undo(w http.ResponseWriter, r *http.Request) {
+	userID, ok := c.checked(w, r)
+	if !ok {
+		return
+	}
+	if err := c.change.Undo(r.Context(), r.PostForm.Get("id"), userID); err != nil {
+		c.logger.WarnContext(r.Context(), "undo", slog.Any("error", err))
+		c.render(w, r, "Not undone: "+err.Error())
+		return
+	}
+	c.render(w, r, "Undone. The object is as it was before the change.")
+}
+
 func (c *Consent) setHalt(w http.ResponseWriter, r *http.Request) {
 	userID, ok := c.checked(w, r)
 	if !ok {
@@ -490,6 +546,18 @@ tr.changed td{background:var(--note)}</style></head><body>
 <form method="post" action="action"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}">
 <button name="action" value="approve">Approve</button><button name="action" value="deny">Deny</button></form>
 </section>{{else}}<p>No action is waiting.</p>{{end}}
+<h2>Configuration changes</h2>
+{{range .Changes}}<section>
+<p><strong>{{if .Change.Creation}}Created{{else if .Change.Deletion}}Deleted{{else}}Changed{{end}} {{.Change.Kind}}{{if .Change.Object}} {{.Change.Object}}{{end}}</strong>
+{{if .Failed}}<span class="warn">— not made: {{.Failed}}</span>{{else if .Undone}}— undone {{.Undone}}{{end}}</p>
+<dl><dt>When</dt><dd>{{.When}}</dd><dt>Requested by</dt><dd>{{if .Client}}{{.Client}} ({{.ClientHost}}){{else}}{{.ClientHost}}{{end}}</dd><dt>Tool</dt><dd>{{.Tool}}</dd></dl>
+<details><summary>Before and after</summary><table><tr><th>Field</th><th>Before</th><th>After</th></tr>
+{{range .Change.Rows}}<tr{{if .Changed}} class="changed"{{end}}><td>{{.Field}}</td><td>{{if .InBefore}}<code>{{.Before}}</code>{{end}}</td><td>{{if .InAfter}}<code>{{.After}}</code>{{end}}</td></tr>
+{{end}}</table></details>
+{{if and (not .Failed) (not .Undone)}}<form method="post" action="undo"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}">
+<button>Undo</button></form>
+<p><small>Undo writes "Before" back. It does so only if the object is still as "After" shows it.</small></p>{{end}}
+</section>{{else}}<p>No configuration was changed through ha-airlock.</p>{{end}}
 <h2>Applications waiting for your approval</h2>
 {{range .Pending}}<section>
 <p class="code">{{.Code}}</p>

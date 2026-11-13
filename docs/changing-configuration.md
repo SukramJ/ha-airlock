@@ -83,9 +83,32 @@ shown the new difference.
   can be taken back. A change is written there before it is sent to Home
   Assistant; if that fails, the change is not made.
 
+## Take a change back
+
+The sidebar page lists the last twenty changes under **Configuration
+changes**, newest first, each with what was there before and after.
+**Undo** writes "Before" back:
+
+- a created helper is deleted;
+- a changed helper gets its earlier configuration;
+- a deleted helper is created again. Home Assistant gives it an entity
+  anew. It gets the label back if it carried it when it was deleted; a
+  name or an area you had given the entity in Home Assistant is not
+  restored.
+
+Undo works only if the helper is still as "After" shows it. If someone
+has changed it since, nothing is written and the page says so. Whether
+that is the case is checked when you press the button.
+
+Only an administrator can undo, on this page. An application cannot: if
+it wants a change back, it asks for the opposite change and waits for your
+approval. Undo also works while the kill switch is engaged. Every undo,
+and every refused one, is in the audit log with your user.
+
+A change whose write failed is listed as "not made" and has nothing to
+undo.
+
 ## Not there yet
 
-- Taking a change back from the sidebar page. The journal is written; the
-  page does not show it yet.
 - Every other kind of configuration, and the other helper domains.
 - ADR 0006 describes the whole design and what is still unverified.

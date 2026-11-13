@@ -332,29 +332,106 @@ func (d helperDomain) create() Tool {
 			if err != nil {
 				return Change{}, err
 			}
-			after, err := json.Marshal(state)
-			if err != nil {
-				return Change{}, fmt.Errorf("encode the requested state: %w", err)
-			}
-			return Change{
-				Summary: "Create a " + d.noun,
-				After:   after,
-				Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
-					var created struct {
-						ID string `json:"id"`
-					}
-					if err := core.Call(ctx, d.domain+"/create", state, &created); err != nil {
-						return "", nil, fmt.Errorf("%s/create: %w", d.domain, err)
-					}
-					entity, err := d.entityOf(ctx, core, created.ID)
-					if err != nil {
-						return "", nil, err
-					}
-					return entity, json.RawMessage(fmt.Sprintf(`{"created":%q}`, entity)), nil
-				},
-			}, nil
+			return d.planCreate(state)
+		},
+		// What was created is taken back by deleting it.
+		Revert: func(ctx context.Context, core Core, object string, _, _ json.RawMessage) (Change, error) {
+			return d.planDelete(ctx, core, object)
 		},
 	}
+}
+
+// recorded reads a state the journal holds into the fields of a helper,
+// through the same checks a client's fields pass.
+func (d helperDomain) recorded(state json.RawMessage) (map[string]json.RawMessage, error) {
+	given := map[string]json.RawMessage{}
+	if err := json.Unmarshal(state, &given); err != nil {
+		return nil, fmt.Errorf("the recorded state is not an object: %w", err)
+	}
+	return d.state(given, "")
+}
+
+// planUpdate plans replacing the stored configuration of the helper an
+// entity stands for by the given state.
+func (d helperDomain) planUpdate(ctx context.Context, core Core, entity string, state map[string]json.RawMessage) (Change, error) {
+	item, name, err := d.find(ctx, core, entity)
+	if err != nil {
+		return Change{}, err
+	}
+	before, err := json.Marshal(item.fields)
+	if err != nil {
+		return Change{}, fmt.Errorf("encode the present state: %w", err)
+	}
+	after, err := json.Marshal(state)
+	if err != nil {
+		return Change{}, fmt.Errorf("encode the requested state: %w", err)
+	}
+	return Change{
+		Summary: fmt.Sprintf("Change the %s %s", d.noun, entity),
+		Object:  entity, Name: name, Entity: entity, Before: before, After: after,
+		Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
+			message := map[string]json.RawMessage{}
+			for key, value := range state {
+				message[key] = value
+			}
+			id, err := json.Marshal(item.id)
+			if err != nil {
+				return "", nil, fmt.Errorf("encode the helper's id: %w", err)
+			}
+			message[d.domain+"_id"] = id
+			if err := core.Call(ctx, d.domain+"/update", message, nil); err != nil {
+				return "", nil, fmt.Errorf("%s/update: %w", d.domain, err)
+			}
+			return entity, json.RawMessage(fmt.Sprintf(`{"changed":%q}`, entity)), nil
+		},
+	}, nil
+}
+
+// planDelete plans deleting the helper an entity stands for.
+func (d helperDomain) planDelete(ctx context.Context, core Core, entity string) (Change, error) {
+	item, name, err := d.find(ctx, core, entity)
+	if err != nil {
+		return Change{}, err
+	}
+	before, err := json.Marshal(item.fields)
+	if err != nil {
+		return Change{}, fmt.Errorf("encode the present state: %w", err)
+	}
+	return Change{
+		Summary: fmt.Sprintf("Delete the %s %s", d.noun, entity),
+		Object:  entity, Name: name, Entity: entity, Before: before,
+		Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
+			if err := core.Call(ctx, d.domain+"/delete", map[string]string{d.domain + "_id": item.id}, nil); err != nil {
+				return "", nil, fmt.Errorf("%s/delete: %w", d.domain, err)
+			}
+			return entity, json.RawMessage(fmt.Sprintf(`{"deleted":%q}`, entity)), nil
+		},
+	}, nil
+}
+
+// planCreate plans creating a helper with the given state.
+func (d helperDomain) planCreate(state map[string]json.RawMessage) (Change, error) {
+	after, err := json.Marshal(state)
+	if err != nil {
+		return Change{}, fmt.Errorf("encode the requested state: %w", err)
+	}
+	return Change{
+		Summary: "Create a " + d.noun,
+		After:   after,
+		Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
+			var created struct {
+				ID string `json:"id"`
+			}
+			if err := core.Call(ctx, d.domain+"/create", state, &created); err != nil {
+				return "", nil, fmt.Errorf("%s/create: %w", d.domain, err)
+			}
+			entity, err := d.entityOf(ctx, core, created.ID)
+			if err != nil {
+				return "", nil, err
+			}
+			return entity, json.RawMessage(fmt.Sprintf(`{"created":%q}`, entity)), nil
+		},
+	}, nil
 }
 
 func (d helperDomain) update() Tool {
@@ -381,37 +458,15 @@ func (d helperDomain) update() Tool {
 			if err != nil {
 				return Change{}, err
 			}
-			item, name, err := d.find(ctx, core, entity)
+			return d.planUpdate(ctx, core, entity, state)
+		},
+		// A change is taken back by writing the recorded state again.
+		Revert: func(ctx context.Context, core Core, object string, before, _ json.RawMessage) (Change, error) {
+			state, err := d.recorded(before)
 			if err != nil {
 				return Change{}, err
 			}
-			before, err := json.Marshal(item.fields)
-			if err != nil {
-				return Change{}, fmt.Errorf("encode the present state: %w", err)
-			}
-			after, err := json.Marshal(state)
-			if err != nil {
-				return Change{}, fmt.Errorf("encode the requested state: %w", err)
-			}
-			return Change{
-				Summary: fmt.Sprintf("Change the %s %s", d.noun, entity),
-				Object:  entity, Name: name, Entity: entity, Before: before, After: after,
-				Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
-					message := map[string]json.RawMessage{}
-					for key, value := range state {
-						message[key] = value
-					}
-					id, err := json.Marshal(item.id)
-					if err != nil {
-						return "", nil, fmt.Errorf("encode the helper's id: %w", err)
-					}
-					message[d.domain+"_id"] = id
-					if err := core.Call(ctx, d.domain+"/update", message, nil); err != nil {
-						return "", nil, fmt.Errorf("%s/update: %w", d.domain, err)
-					}
-					return entity, json.RawMessage(fmt.Sprintf(`{"changed":%q}`, entity)), nil
-				},
-			}, nil
+			return d.planUpdate(ctx, core, object, state)
 		},
 	}
 }
@@ -439,24 +494,27 @@ func (d helperDomain) remove() Tool {
 			if len(given) != 1 {
 				return Change{}, errors.New("invalid arguments: only entity_id is taken")
 			}
-			item, name, err := d.find(ctx, core, entity)
+			return d.planDelete(ctx, core, entity)
+		},
+		// A deletion is taken back by creating the helper again. The
+		// entity it gets is Home Assistant's choice.
+		Revert: func(ctx context.Context, core Core, object string, before, _ json.RawMessage) (Change, error) {
+			state, err := d.recorded(before)
 			if err != nil {
 				return Change{}, err
 			}
-			before, err := json.Marshal(item.fields)
-			if err != nil {
-				return Change{}, fmt.Errorf("encode the present state: %w", err)
+			var entries []struct {
+				EntityID string `json:"entity_id"`
 			}
-			return Change{
-				Summary: fmt.Sprintf("Delete the %s %s", d.noun, entity),
-				Object:  entity, Name: name, Entity: entity, Before: before,
-				Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
-					if err := core.Call(ctx, d.domain+"/delete", map[string]string{d.domain + "_id": item.id}, nil); err != nil {
-						return "", nil, fmt.Errorf("%s/delete: %w", d.domain, err)
-					}
-					return entity, json.RawMessage(fmt.Sprintf(`{"deleted":%q}`, entity)), nil
-				},
-			}, nil
+			if err := core.Call(ctx, "config/entity_registry/list", nil, &entries); err != nil {
+				return Change{}, fmt.Errorf("config/entity_registry/list: %w", err)
+			}
+			for i := range entries {
+				if entries[i].EntityID == object {
+					return Change{}, fmt.Errorf("%s exists again", object)
+				}
+			}
+			return d.planCreate(state)
 		},
 	}
 }

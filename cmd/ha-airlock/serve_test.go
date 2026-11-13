@@ -778,7 +778,32 @@ func TestHelperIsChangedOnlyAfterApprovalAndIsJournalled(t *testing.T) {
 	if audited := r.auditText(t); !strings.Contains(audited, "; change ") || !strings.Contains(audited, `"tool":"input_boolean_update"`) {
 		t.Errorf("the audit log does not name the change:\n%s", audited)
 	}
+
+	// The change is on the sidebar page, and an administrator takes it
+	// back there: Home Assistant, which now holds the new configuration,
+	// is sent the old one.
+	r.home.Mu.Lock()
+	r.home.CoreResults["input_boolean/list"] = `[{"id":"guest_mode","name":"Visitors"}]`
+	r.home.Mu.Unlock()
+	shown = r.asAdmin(t, http.MethodGet, "/", nil).body
+	undoID := undoIDRE.FindStringSubmatch(shown)
+	token = formTokenRE.FindStringSubmatch(shown)
+	if undoID == nil || token == nil || !strings.Contains(shown, "<strong>Changed helper input_boolean.guests</strong>") {
+		t.Fatalf("the sidebar page does not list the change:\n%s", shown)
+	}
+	got := r.asAdmin(t, http.MethodPost, "/undo", url.Values{"csrf": {token[1]}, "id": {undoID[1]}})
+	if got.status != http.StatusOK || !strings.Contains(got.body, "Undone.") || updates() != 2 {
+		t.Fatalf("undo: status %d, %d updates:\n%s", got.status, updates(), got.body)
+	}
+	if audited := r.auditText(t); !strings.Contains(audited, `"event":"change_undone"`) || !strings.Contains(audited, `"approver":"admin-user-id"`) {
+		t.Errorf("the audit log does not record the undo:\n%s", audited)
+	}
+	if strings.Contains(r.asAdmin(t, http.MethodGet, "/", nil).body, `action="undo"`) {
+		t.Error("a change that was undone can be undone again")
+	}
 }
+
+var undoIDRE = regexp.MustCompile(`action="undo"><input type="hidden" name="csrf" value="[^"]+"><input type="hidden" name="id" value="([0-9a-f]+)"`)
 
 // A policy file where earlier versions read it is neither read nor passed
 // over: it may be stricter than the default, so the server does not start.
