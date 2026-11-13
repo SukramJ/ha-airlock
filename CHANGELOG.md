@@ -130,6 +130,12 @@ All notable changes to ha-airlock are recorded here. The format follows
 - The pages were not readable in a dark colour scheme: they set dark text
   and no background. Every page now sets its own background and colours
   for the light and for the dark scheme.
+- Undo compared a helper with the configuration that was asked for, not
+  with the one Home Assistant stored. Where Home Assistant fills in a
+  default or stores a number in another form, the two differ and the undo
+  would have been refused. The journal now keeps the state read back
+  after the write, and the list of changes shows it. Toggle helpers have
+  no default and were not affected.
 
 ### Changed
 

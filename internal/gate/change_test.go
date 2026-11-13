@@ -30,6 +30,21 @@ type helpers struct {
 	// was made.
 	journalled int
 	fail       error
+	// holds, if set, is what Home Assistant stores for a write in place of
+	// the state it was sent, as it does where a field has a default.
+	holds string
+	// unreadable makes reading the state after a write fail.
+	unreadable bool
+}
+
+// left reads the state an object is in, as the state a write left.
+func (h *helpers) left(_ context.Context, _ catalog.Core, object string) (json.RawMessage, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.unreadable {
+		return nil, errors.New("home assistant does not answer")
+	}
+	return json.RawMessage(h.states[object]), nil
 }
 
 func (h *helpers) state(entity string) string {
@@ -65,6 +80,9 @@ func (h *helpers) tools(f *fixture) []catalog.Tool {
 				return "", nil, h.fail
 			}
 			h.states[entity] = after
+			if h.holds != "" {
+				h.states[entity] = h.holds
+			}
 			return entity, json.RawMessage(`{"password":"` + secretInResult + `","done":true}`), nil
 		}
 	}
@@ -134,7 +152,7 @@ func (h *helpers) tools(f *fixture) []catalog.Tool {
 				}
 				return catalog.Change{
 					Summary: "Change helper " + entity, Object: entity, Name: "Guests", Entity: entity,
-					Before: json.RawMessage(before), After: json.RawMessage(after), Apply: write(entity, after),
+					Before: json.RawMessage(before), After: json.RawMessage(after), Apply: write(entity, after), Left: h.left,
 				}, nil
 			},
 		},
@@ -507,6 +525,46 @@ func TestUndoWritesNothingIfTheObjectHasChangedSince(t *testing.T) {
 	r := lastRecord(t, f)
 	if result, _ := r["result"].(string); r["event"] != "change_undone" || !strings.HasPrefix(result, "not undone: ") {
 		t.Fatalf("audit record = %v", r)
+	}
+}
+
+// Home Assistant may hold another state than it was sent: a default filled
+// in, a number in another form. The journal keeps the state read back, and
+// the undo compares against that one.
+func TestUndoComparesAgainstTheStateHomeAssistantHeldAfterTheChange(t *testing.T) {
+	t.Parallel()
+	f, h := changing(t, changePolicy)
+	const held = `{"name":"Visitors","step":1}`
+	h.holds = held
+	change := made(t, f, "helper_set", setGuest)
+
+	if got, _ := f.journal.Get(change.ID); string(got.After) != `{"name":"Visitors"}` || string(got.Left) != held {
+		t.Fatalf("journal: asked for %s, read back %s", got.After, got.Left)
+	}
+	h.mu.Lock()
+	h.holds = ""
+	h.mu.Unlock()
+	if err := f.gate.Undo(context.Background(), change.ID, "admin-1"); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if h.state("input_boolean.guest") != `{"name":"Guests"}` {
+		t.Fatalf("state after the undo = %s", h.state("input_boolean.guest"))
+	}
+}
+
+// If the state cannot be read back, the change stands, the audit record
+// says so, and the journal keeps the state that was asked for.
+func TestChangeWhoseStateCannotBeReadBackIsStillRecorded(t *testing.T) {
+	t.Parallel()
+	f, h := changing(t, changePolicy)
+	h.unreadable = true
+	change := made(t, f, "helper_set", setGuest)
+
+	if got, _ := f.journal.Get(change.ID); got.Left != nil || got.Failed != "" || string(got.Held()) != `{"name":"Visitors"}` {
+		t.Fatalf("journal = %+v", got)
+	}
+	if result, _ := lastRecord(t, f)["result"].(string); !strings.Contains(result, "could not be read back") {
+		t.Fatalf("audit result = %q", result)
 	}
 }
 

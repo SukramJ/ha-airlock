@@ -46,6 +46,10 @@ type Home struct {
 	// CoreResults are canned results of Core's own WebSocket commands, by
 	// command type, as JSON.
 	CoreResults map[string]string
+	// CoreThen changes CoreResults once a command has been answered: by
+	// the command's type, the results that hold from then on. A write
+	// that changes what a later read returns is set up with it.
+	CoreThen map[string]map[string]string
 	// CoreCommands are the commands Core's WebSocket received, other than
 	// service calls.
 	CoreCommands []string
@@ -164,6 +168,9 @@ func (h *Home) coreCommand(commandType string, raw json.RawMessage) (result, err
 		defer h.Mu.Unlock()
 		h.CoreCommands = append(h.CoreCommands, commandType)
 		if canned, ok := h.CoreResults[commandType]; ok {
+			for then, result := range h.CoreThen[commandType] {
+				h.CoreResults[then] = result
+			}
 			return canned, ""
 		}
 		return "", "unknown_command"
