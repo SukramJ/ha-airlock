@@ -61,7 +61,17 @@ A profile decides what a client may do. You assign it when you approve.
 | `local` | may read and diagnose |
 | `remote` | may do nothing yet |
 
-To change this, put a file `policy.json` into the App's data directory:
+To change this, put a file `policy.json` into the App's configuration
+folder. Home Assistant keeps one such folder per App, beside its own
+configuration and outside the App's private data; the Supervisor creates
+it when ha-airlock starts and includes it in backups. Apps that edit
+files — the file editor, Samba, the SSH App — show it under the App
+folders, in a folder whose name ends in `ha_airlock`. ha-airlock itself
+can only read it. The file is read when ha-airlock starts, so restart the
+App after changing it.
+
+A `policy.json` in the App's private data directory, where earlier
+versions read it, stops ha-airlock from starting: move or remove it.
 
 ```json
 {

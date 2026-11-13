@@ -42,6 +42,9 @@ type environment struct {
 	// dataDir is the directory the Supervisor keeps for the App across
 	// restarts and updates.
 	dataDir string
+	// configDir is the App's own configuration folder, where the owner
+	// keeps the policy file. The App only reads it.
+	configDir string
 	// ingressAddr is where the Supervisor reaches the consent page,
 	// publicAddr where the owner's reverse proxy reaches everything else.
 	ingressAddr string
@@ -74,6 +77,7 @@ func main() {
 		supervisorToken: os.Getenv("SUPERVISOR_TOKEN"),
 		coreHost:        "homeassistant",
 		dataDir:         "/data",
+		configDir:       "/config",
 		ingressAddr:     ":8099",
 		publicAddr:      ":8443",
 		supervisorPeers: func(ctx context.Context) ([]netip.Addr, error) {

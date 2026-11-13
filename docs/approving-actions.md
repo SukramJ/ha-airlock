@@ -17,7 +17,8 @@ An entity without the label cannot be switched, whatever the policy says.
 The application is told that the entity is not released; it is not told
 whether the entity exists.
 
-Another label id can be set in `/data/policy.json`:
+Another label id can be set in `policy.json` (where the file lives is in
+`docs/connecting-a-client.md`):
 
 ```json
 {"version": 1, "profiles": {"local": {"R0": "allow", "R1": "approval"}}, "control_label": "ai_may_switch"}
@@ -54,7 +55,7 @@ locks, alarm panels or covers. The full list is in `docs/tools.md`.
 
 ## Without asking each time
 
-In `/data/policy.json`, `"R1": "allow"` for the `local` profile lets an
+In `policy.json`, `"R1": "allow"` for the `local` profile lets an
 approved application switch released entities without asking. The label
 is still required. `"R1": "deny"`, or leaving `R1` out, switches
 controlling off.

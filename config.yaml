@@ -26,6 +26,14 @@ ingress_port: 8099
 panel_title: ha-airlock
 panel_icon: mdi:shield-lock-outline
 
+# The App's own configuration folder, mounted at /config, read-only: the
+# owner puts policy.json there, and ha-airlock cannot change its own
+# policy. The Supervisor creates the folder when the App starts and
+# includes it in backups (supervisor/docker/app.py:500-516,
+# supervisor/apps/app.py:1408-1418 and :1642 at 98a2322).
+map:
+  - addon_config:ro
+
 # The authorization server and the MCP endpoint. The port is not published
 # after installation. Publish it only towards a reverse proxy that serves it
 # over HTTPS, and enter that HTTPS address as public_url.

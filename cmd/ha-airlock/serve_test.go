@@ -74,9 +74,11 @@ func (b *safeBuffer) String() string {
 type running struct {
 	home    *provisiontest.Home
 	dataDir string
-	ingress string
-	public  string // empty when the public listener is closed
-	log     *safeBuffer
+	// configDir is the folder the owner's policy file is read from.
+	configDir string
+	ingress   string
+	public    string // empty when the public listener is closed
+	log       *safeBuffer
 }
 
 // startServer runs "ha-airlock serve" against a stand-in Home Assistant
@@ -93,7 +95,7 @@ func startServerIn(t *testing.T, optionsJSON string, change func(*environment), 
 	home := provisiontest.NewHome(t)
 	home.CoreResults = map[string]string{"system_log/list": `[{"name":"homeassistant.components.mqtt","level":"ERROR",
 		"message":["cannot connect to mqtt://user:` + credentialInLog + `@broker:1883"],"count":2}]`}
-	r := &running{home: home, dataDir: t.TempDir(), log: &safeBuffer{}}
+	r := &running{home: home, dataDir: t.TempDir(), configDir: t.TempDir(), log: &safeBuffer{}}
 	if optionsJSON != "" {
 		if err := os.WriteFile(filepath.Join(r.dataDir, "options.json"), []byte(optionsJSON), 0o600); err != nil {
 			t.Fatal(err)
@@ -108,6 +110,7 @@ func startServerIn(t *testing.T, optionsJSON string, change func(*environment), 
 		supervisorToken: provisiontest.SupervisorToken,
 		coreHost:        "127.0.0.1",
 		dataDir:         r.dataDir,
+		configDir:       r.configDir,
 		ingressAddr:     "127.0.0.1:0",
 		publicAddr:      "127.0.0.1:0",
 		supervisorPeers: func(context.Context) ([]netip.Addr, error) { return peers, nil },
@@ -712,7 +715,7 @@ func TestHelperIsChangedOnlyAfterApprovalAndIsJournalled(t *testing.T) {
 	t.Parallel()
 	r := startServerIn(t, `{"public_url":"`+publicURL+`"}`, func(env *environment) {
 		policyFile := `{"version":1,"profiles":{"local":{"R0":"allow","R2":"approval"}},"configuration":{"local":{"helper":{"change":"approval"}}}}`
-		if err := os.WriteFile(filepath.Join(env.dataDir, "policy.json"), []byte(policyFile), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(env.configDir, "policy.json"), []byte(policyFile), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -774,6 +777,34 @@ func TestHelperIsChangedOnlyAfterApprovalAndIsJournalled(t *testing.T) {
 	}
 	if audited := r.auditText(t); !strings.Contains(audited, "; change ") || !strings.Contains(audited, `"tool":"input_boolean_update"`) {
 		t.Errorf("the audit log does not name the change:\n%s", audited)
+	}
+}
+
+// A policy file where earlier versions read it is neither read nor passed
+// over: it may be stricter than the default, so the server does not start.
+func TestServerDoesNotStartWithAPolicyFileLeftInTheDataDirectory(t *testing.T) {
+	t.Parallel()
+	home := provisiontest.NewHome(t)
+	dataDir, configDir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "policy.json"), []byte(`{"version":1,"profiles":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := environment{
+		supervisorURL: home.Supervisor.URL, supervisorToken: provisiontest.SupervisorToken, coreHost: "127.0.0.1",
+		dataDir: dataDir, configDir: configDir, ingressAddr: "127.0.0.1:0", publicAddr: "127.0.0.1:0",
+		supervisorPeers: func(context.Context) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		},
+		clientMetadata: oneClient{}, now: time.Now, sweepEvery: sweepEvery,
+	}
+	var log safeBuffer
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"serve"}, env, &log)
+
+	if code != exitFailed || !strings.Contains(log.String(), "policy.json in the data directory is no longer read") {
+		t.Fatalf("exit code %d, log:\n%s", code, log.String())
 	}
 }
 
