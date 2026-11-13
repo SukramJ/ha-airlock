@@ -2,8 +2,10 @@
 
 Status: accepted, 2026-11-13. The owner decided five points, named at the
 end of *Context*, and accepted the rest as proposed by the assistant.
-Nothing of it is built. Every part is to be measured on a running Home Assistant before the next
-part is built on it; a measurement that contradicts this record amends it.
+Built so far: the journal of changes (`internal/changes`), which nothing
+uses yet. Every part is to be measured on a running Home Assistant before
+the next part is built on it; a measurement that contradicts this record
+amends it.
 
 ## Context
 
