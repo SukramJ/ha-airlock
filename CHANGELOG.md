@@ -77,6 +77,9 @@ All notable changes to ha-airlock are recorded here. The format follows
   in the ha-airlock page with a description written by the server, and
   runs once when it is repeated after an administrator approved it. See
   `docs/approving-actions.md` and ADR 0005.
+- Two more read-only tools: `entities_list` (the entity registry with
+  labels, by domain or label) and `states_get` (state and attributes of
+  up to 50 named entities).
 - While an action waits for approval, ha-airlock keeps one notification
   in Home Assistant that says so and nothing more; it is dismissed when
   nothing waits. Expired requests are noticed and recorded within about

@@ -69,6 +69,8 @@ func All() []Tool {
 		configEntriesList(),
 		traceList(),
 		logbookEvents(),
+		entitiesList(),
+		statesGet(),
 	}, controlTools()...)
 }
 

@@ -367,6 +367,12 @@ Assistant OS / Supervised).
   `logbook/get_events` with a period and with entity ids — were accepted
   by that Core with the parameters the tools send; `trace/list` with a
   domain the tool refuses was refused by Core as well.
+- *The entity tools' commands*, on that Core (2026.11.1, 2026-11-13):
+  `config/entity_registry/list` returned 7,211 entries and `get_states`
+  4,921 states in 2.6 MiB; every entry carried the fields the tools read
+  (`homeassistant/helpers/entity_registry.py:393-425` and
+  `homeassistant/components/websocket_api/commands.py:418-430` at
+  `3f8160ce7ff`). What was measured for the control tools is in ADR 0005.
 
 **Unverified:**
 

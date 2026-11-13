@@ -5,7 +5,7 @@
 # with (supervisor/apps/app.py:1199 at 98a2322). Raise the version with
 # every change to ingress, ports, options or permissions.
 name: ha-airlock
-version: "0.5.0-dev"
+version: "0.6.0-dev"
 slug: ha_airlock
 description: MCP gateway for Home Assistant with client approval, redaction and an audit log. Read-only diagnostic tools so far.
 url: https://github.com/SukramJ/ha-airlock
