@@ -86,6 +86,12 @@ All notable changes to ha-airlock are recorded here. The format follows
   twenty seconds.
 - The approval page shows, beside a waiting action, the state its entity
   is in at that moment.
+- The first tools that change configuration (tier R2): `input_boolean_create`,
+  `input_boolean_update` and `input_boolean_delete`, and the read-only
+  `input_boolean_list`. They are off until the policy file opens the kind
+  `helper`, never run without an approval, and show the owner the present
+  configuration beside the requested one. See
+  `docs/changing-configuration.md`. Undo is not built yet.
 - The gate knows how a configuration change runs, ahead of the tools: the
   policy for the kind, the tool's plan read from Home Assistant, the
   release of the object, an approval bound to the state that was read,

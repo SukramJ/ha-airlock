@@ -146,5 +146,7 @@ No other client has been tried.
 
 ## Not there yet
 
-- Tools that change configuration, the system or files. What can be
-  switched today is in `docs/tools.md`.
+- Tools that change the system or files, and most kinds of
+  configuration: only toggle helpers can be changed, see
+  `docs/changing-configuration.md`. What exists today is in
+  `docs/tools.md`.

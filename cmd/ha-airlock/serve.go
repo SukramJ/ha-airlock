@@ -24,6 +24,7 @@ import (
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/build"
 	"github.com/SukramJ/ha-airlock/internal/catalog"
+	"github.com/SukramJ/ha-airlock/internal/changes"
 	"github.com/SukramJ/ha-airlock/internal/gate"
 	"github.com/SukramJ/ha-airlock/internal/halt"
 	"github.com/SukramJ/ha-airlock/internal/mcpserver"
@@ -260,10 +261,14 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 		return a, nil
 	}
 
+	journal, err := changes.Open(filepath.Join(env.dataDir, "changes.json"), env.now)
+	if err != nil {
+		return nil, err
+	}
 	tools := catalog.All()
 	g := gate.New(gate.Config{
 		Policy: pol, Audit: auditLog, Core: core, Tools: tools,
-		Timeout: toolTimeout, Halted: killSwitch.Engaged, Approvals: approvals,
+		Timeout: toolTimeout, Halted: killSwitch.Engaged, Approvals: approvals, Journal: journal,
 	})
 	authz := oauth.NewServer(store, env.clientMetadata, opts.PublicURL, logger)
 	publicMux := http.NewServeMux()

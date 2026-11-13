@@ -2,10 +2,11 @@
 
 Status: accepted, 2026-11-13. The owner decided five points, named at the
 end of *Context*, and accepted the rest as proposed by the assistant.
-Built so far: the journal of changes (`internal/changes`), the policy's
-part (`internal/policy`), the difference on the approval page and the
-gate's step for a change (`internal/gate`). No tool of tier R2 exists
-yet, and the running server has no journal. Every part is to be measured on a running Home Assistant before
+Built so far: step 1 of the order of building without undo — the journal,
+the policy's part, the difference on the approval page, the gate's step
+for a change, and the tools for `input_boolean` helpers. Not built: undo
+in the sidebar page, and everything from step 2 on. Not measured on a
+running Home Assistant yet. Every part is to be measured on a running Home Assistant before
 the next part is built on it; a measurement that contradicts this record
 amends it.
 
@@ -193,8 +194,10 @@ them. They are not limited to released objects.
 - **Helpers** — `input_boolean`, `input_number`, `input_text`,
   `input_select`, `input_datetime`, `input_button`, `counter`, `timer`:
   create, update, delete, with the fields of each domain's storage schema.
-  A deletion stores the helper's registry entry with it; the undo creates
-  the helper again and restores name, area and the release label.
+  A deletion is to store the helper's registry entry with it, so that the
+  undo can create the helper again and restore name, area and the release
+  label. As built, a deletion stores the helper's configuration only; the
+  registry entry comes with the undo.
 - **Areas**: create and update of name, icon, floor, aliases and picture.
   Delete only for an area nothing is assigned to; the entities and devices
   of an area lose their assignment when it goes, and the journal does not

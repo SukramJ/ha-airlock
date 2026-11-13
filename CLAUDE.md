@@ -29,11 +29,15 @@ Assistant App: one container beside Core.
   App's container runs: it provisions its own Home Assistant user, serves
   the consent page through Ingress and, behind the owner's HTTPS reverse
   proxy, the OAuth 2.1 authorization server and the MCP endpoint. Every
-  tool call passes `internal/gate`. The catalogue holds seven read-only tools (R0)
-  and six control tools (R1); `docs/tools.md` is generated from it. R1
-  acts only on entities carrying the owner's label and, by default, after
-  an approval in the sidebar page (ADR 0005). The sidebar page shows the
-  audit log. Not built: any tier above R1. Other
+  tool call passes `internal/gate`. The catalogue holds eight read-only
+  tools (R0), six control tools (R1) and three tools that change
+  configuration (R2, toggle helpers only); `docs/tools.md` is generated
+  from it. R1 acts only on entities carrying the owner's label and, by
+  default, after an approval in the sidebar page (ADR 0005). R2 is off
+  until the policy file opens a kind, never runs without an approval, and
+  is recorded in the journal of changes first (ADR 0006). The sidebar page
+  shows the audit log. Not built: undo, the other kinds of R2, any tier
+  above R2. Other
   commands: `probe`, `provision`, `audit verify`.
 
 Every tool call passes one chain, in this order:

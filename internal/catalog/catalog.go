@@ -114,7 +114,7 @@ type Change struct {
 // All returns the catalogue. The slice is new on every call; the catalogue
 // itself cannot be changed.
 func All() []Tool {
-	return append([]Tool{
+	tools := []Tool{
 		systemLogList(),
 		repairsListIssues(),
 		configEntriesList(),
@@ -122,7 +122,9 @@ func All() []Tool {
 		logbookEvents(),
 		entitiesList(),
 		statesGet(),
-	}, controlTools()...)
+	}
+	tools = append(tools, controlTools()...)
+	return append(tools, helperTools()...)
 }
 
 // Lookup returns the tool with the given name.

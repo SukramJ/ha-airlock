@@ -27,7 +27,7 @@ func TestControlToolsAreExactlyTheDeclaredServices(t *testing.T) {
 		if _, ok := controlCases[tool.Name]; ok != (tool.Tier == catalog.R1) {
 			t.Errorf("tool %s (tier %s): the R1 tools and the cases of this test differ", tool.Name, tool.Tier)
 		}
-		if tool.Tier != catalog.R0 && tool.Tier != catalog.R1 {
+		if tool.Tier != catalog.R0 && tool.Tier != catalog.R1 && !changeCases[tool.Name] {
 			t.Errorf("tool %s has tier %s, for which no test exists", tool.Name, tool.Tier)
 		}
 	}

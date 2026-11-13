@@ -704,6 +704,79 @@ func TestWaitingActionExpiresOnTheRunningServerWithoutAFurtherCall(t *testing.T)
 	}
 }
 
+// A helper is changed through the server as main builds it: the policy
+// file opens the kind, the call waits with its difference on the sidebar
+// page, and after the approval the change is in the journal and was sent
+// to Home Assistant.
+func TestHelperIsChangedOnlyAfterApprovalAndIsJournalled(t *testing.T) {
+	t.Parallel()
+	r := startServerIn(t, `{"public_url":"`+publicURL+`"}`, func(env *environment) {
+		policyFile := `{"version":1,"profiles":{"local":{"R0":"allow","R2":"approval"}},"configuration":{"local":{"helper":{"change":"approval"}}}}`
+		if err := os.WriteFile(filepath.Join(env.dataDir, "policy.json"), []byte(policyFile), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	r.home.Mu.Lock()
+	r.home.CoreResults["config/entity_registry/get"] = `{"labels":["airlock"],"platform":"input_boolean","unique_id":"guest_mode","name":"Guests <here>","original_name":null}`
+	r.home.CoreResults["input_boolean/list"] = `[{"id":"guest_mode","name":"Guest mode","icon":"mdi:account"}]`
+	r.home.CoreResults["input_boolean/update"] = `null`
+	r.home.CoreResults["get_states"] = `[{"entity_id":"input_boolean.guests","state":"off"}]`
+	r.home.Mu.Unlock()
+	accessToken := r.authorize(t, "local")
+	args := map[string]string{"entity_id": "input_boolean.guests", "name": "Visitors"}
+	updates := func() int {
+		r.home.Mu.Lock()
+		defer r.home.Mu.Unlock()
+		n := 0
+		for _, c := range r.home.CoreCommands {
+			if c == "input_boolean/update" {
+				n++
+			}
+		}
+		return n
+	}
+
+	text, isError := r.callToolWith(t, accessToken, "input_boolean_update", args)
+	if isError || !strings.HasPrefix(text, "NOT RUN YET") || updates() != 0 {
+		t.Fatalf("call before the approval: isError = %t, %d updates, %s", isError, updates(), text)
+	}
+	shown := r.asAdmin(t, http.MethodGet, "/", nil).body
+	for _, want := range []string{
+		"Change the toggle helper input_boolean.guests",
+		"<dt>Changes</dt><dd>helper input_boolean.guests — Guests &lt;here&gt;</dd>",
+		`<tr class="changed"><td>icon</td><td><code>&#34;mdi:account&#34;</code></td><td></td></tr>`,
+		`<tr class="changed"><td>name</td><td><code>&#34;Guest mode&#34;</code></td><td><code>&#34;Visitors&#34;</code></td></tr>`,
+	} {
+		if !strings.Contains(shown, want) {
+			t.Fatalf("the sidebar page lacks %q:\n%s", want, shown)
+		}
+	}
+	id, token := actionIDRE.FindStringSubmatch(shown), formTokenRE.FindStringSubmatch(shown)
+	if id == nil || token == nil {
+		t.Fatalf("the sidebar page has no form for the change:\n%s", shown)
+	}
+	if got := r.asAdmin(t, http.MethodPost, "/action", url.Values{"csrf": {token[1]}, "id": {id[1]}, "action": {"approve"}}); got.status != http.StatusOK {
+		t.Fatalf("approve: status %d", got.status)
+	}
+
+	text, isError = r.callToolWith(t, accessToken, "input_boolean_update", args)
+	if isError || !strings.Contains(text, "input_boolean.guests") || !strings.Contains(text, "changed") || updates() != 1 {
+		t.Fatalf("call after the approval: isError = %t, %d updates, %s", isError, updates(), text)
+	}
+	journal, err := os.ReadFile(filepath.Join(r.dataDir, "changes.json")) //nolint:gosec // test file below t.TempDir
+	if err != nil {
+		t.Fatalf("the journal of changes: %v", err)
+	}
+	for _, want := range []string{`"object":"input_boolean.guests"`, `"before":{"icon":"mdi:account","name":"Guest mode"}`, `"after":{"name":"Visitors"}`} {
+		if !strings.Contains(string(journal), want) {
+			t.Errorf("the journal lacks %s:\n%s", want, journal)
+		}
+	}
+	if audited := r.auditText(t); !strings.Contains(audited, "; change ") || !strings.Contains(audited, `"tool":"input_boolean_update"`) {
+		t.Errorf("the audit log does not name the change:\n%s", audited)
+	}
+}
+
 // No waiting request outlives the server, so a notice that an earlier run
 // left in Home Assistant is taken away when the server starts.
 func TestStartTakesAwayANoticeLeftByAnEarlierRun(t *testing.T) {
