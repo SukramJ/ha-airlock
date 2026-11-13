@@ -37,6 +37,7 @@ type Consent struct {
 	halt   KillSwitch
 	audit  Journal
 	action Actions
+	states States
 	csrf   string
 	logger *slog.Logger
 }
@@ -58,14 +59,25 @@ type Actions interface {
 	Decide(ctx context.Context, id string, approve bool, by string) error
 }
 
+// States reads from Home Assistant what state entities are in right now.
+// An entity without a state is left out of the answer.
+type States interface {
+	States(ctx context.Context, ids []string) (map[string]string, error)
+}
+
+// statesTimeout bounds how long the page waits for the states it shows
+// beside a waiting action.
+const statesTimeout = 5 * time.Second
+
 // NewConsent returns the consent page over a store, the kill switch, the
-// audit log and the waiting actions.
-func NewConsent(store *Store, killSwitch KillSwitch, journal Journal, actions Actions, logger *slog.Logger) (*Consent, error) {
+// audit log, the waiting actions and the states of the entities they act
+// on.
+func NewConsent(store *Store, killSwitch KillSwitch, journal Journal, actions Actions, states States, logger *slog.Logger) (*Consent, error) {
 	csrf, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
-	return &Consent{store: store, halt: killSwitch, audit: journal, action: actions, csrf: csrf, logger: logger}, nil
+	return &Consent{store: store, halt: killSwitch, audit: journal, action: actions, states: states, csrf: csrf, logger: logger}, nil
 }
 
 // Register adds the consent page to mux. The paths are relative to the
@@ -111,7 +123,11 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 	type grantView struct {
 		ID, Client, ClientHost, Profile, Created, LastUsed string
 	}
-	type entityView struct{ ID, Name string }
+	type entityView struct {
+		ID, Name, State string
+		// Known reports whether Home Assistant gave a state for the entity.
+		Known bool
+	}
 	type actionView struct {
 		ID, Client, ClientHost, Tool, Summary, Arguments, Age string
 		Entities                                              []entityView
@@ -131,6 +147,7 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 		names[approved[i].ClientID] = approved[i].ClientName
 	}
 	waiting := c.action.Pending()
+	states := c.statesOf(r.Context(), waiting)
 	for i := range waiting {
 		a := &waiting[i]
 		v := actionView{
@@ -138,7 +155,8 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 			Arguments: string(a.Arguments), Age: now.Sub(a.CreatedAt).Round(time.Second).String(),
 		}
 		for _, e := range a.Entities {
-			v.Entities = append(v.Entities, entityView{ID: e.ID, Name: e.Name})
+			state, known := states[e.ID]
+			v.Entities = append(v.Entities, entityView{ID: e.ID, Name: e.Name, State: state, Known: known})
 		}
 		view.Actions = append(view.Actions, v)
 	}
@@ -160,6 +178,30 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 		})
 	}
 	c.write(w, r, consentPage, view)
+}
+
+// statesOf reads the present state of every entity the waiting actions act
+// on, so that the administrator sees what an approval would change. The
+// page is shown without them if Home Assistant does not answer: a decision
+// must stay possible.
+func (c *Consent) statesOf(ctx context.Context, waiting []approval.Request) map[string]string {
+	var ids []string
+	for i := range waiting {
+		for _, e := range waiting[i].Entities {
+			ids = append(ids, e.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, statesTimeout)
+	defer cancel()
+	states, err := c.states.States(ctx, ids)
+	if err != nil {
+		c.logger.WarnContext(ctx, "entity states could not be read for the approval page", slog.Any("error", err))
+		return nil
+	}
+	return states
 }
 
 // write sends one of the pages. Nothing on them comes from anywhere but
@@ -351,7 +393,7 @@ dt{font-weight:600}dd{margin:0 0 .4rem 0}</style></head><body>
 <h2>Actions waiting for your approval</h2>
 {{range .Actions}}<section>
 <p><strong>{{.Summary}}</strong></p>
-<dl>{{range .Entities}}<dt>Entity</dt><dd>{{.ID}}{{if .Name}} — {{.Name}}{{end}}</dd>{{end}}
+<dl>{{range .Entities}}<dt>Entity</dt><dd>{{.ID}}{{if .Name}} — {{.Name}}{{end}}</dd><dt>State now</dt><dd>{{if .Known}}{{.State}}{{else}}not known{{end}}</dd>{{end}}
 <dt>Requested by</dt><dd>{{if .Client}}{{.Client}} ({{.ClientHost}}){{else}}{{.ClientHost}}{{end}}</dd>
 <dt>Tool</dt><dd>{{.Tool}}</dd>
 <dt>Arguments</dt><dd><code>{{.Arguments}}</code></dd>

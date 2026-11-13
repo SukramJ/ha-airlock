@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,29 @@ const sweepEvery = 20 * time.Second
 // approvalNoticeID is the one notification ha-airlock keeps in Home
 // Assistant while an approval is waiting.
 const approvalNoticeID = "ha_airlock_approval"
+
+// entityStates reads entity states for the approval page.
+type entityStates struct{ core catalog.Core }
+
+// States returns the state of each named entity that has one. Core has no
+// command for single states over the WebSocket API, so all are read and
+// the named ones kept.
+func (e entityStates) States(ctx context.Context, ids []string) (map[string]string, error) {
+	var all []struct {
+		EntityID string `json:"entity_id"`
+		State    string `json:"state"`
+	}
+	if err := e.core.Call(ctx, "get_states", nil, &all); err != nil {
+		return nil, fmt.Errorf("get_states: %w", err)
+	}
+	out := make(map[string]string, len(ids))
+	for i := range all {
+		if slices.Contains(ids, all[i].EntityID) {
+			out[all[i].EntityID] = all[i].State
+		}
+	}
+	return out, nil
+}
 
 // approvalNotice returns what tells the owner, in Home Assistant, that an
 // approval is waiting, and takes the notice away when none is. The notice
@@ -207,7 +231,7 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	core := provision.NewCore(coreURL, cred)
 	approvals := approval.New(auditLog, approvalNotice(core, logger), env.now)
 	a.sweep = approvals.Sweep
-	consent, err := oauth.NewConsent(store, killSwitch, auditLog, approvals, logger)
+	consent, err := oauth.NewConsent(store, killSwitch, auditLog, approvals, entityStates{core}, logger)
 	if err != nil {
 		return nil, err
 	}

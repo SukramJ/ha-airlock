@@ -6,6 +6,7 @@ package oauth_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"html"
 	"io"
 	"log/slog"
@@ -42,6 +43,22 @@ type web struct {
 	client  *http.Client
 	halt    *fakeSwitch
 	actions *approval.Store
+	states  *fakeStates
+}
+
+// fakeStates answers with the states it was given, or fails.
+type fakeStates struct {
+	states map[string]string
+	fail   bool
+	asked  [][]string
+}
+
+func (f *fakeStates) States(_ context.Context, ids []string) (map[string]string, error) {
+	f.asked = append(f.asked, ids)
+	if f.fail {
+		return nil, errors.New("core is away")
+	}
+	return f.states, nil
 }
 
 // fakeSwitch is a kill switch that remembers who operated it.
@@ -71,7 +88,8 @@ func newWeb(t *testing.T) *web {
 
 	w.halt = &fakeSwitch{}
 	w.actions = approval.New(w.auditLog, nil, time.Now)
-	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, w.actions, logger)
+	w.states = &fakeStates{states: map[string]string{}}
+	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, w.actions, w.states, logger)
 	if err != nil {
 		t.Fatalf("consent: %v", err)
 	}
@@ -654,6 +672,40 @@ func TestWaitingActionIsShownAndApprovedOnThePageByAnAdministrator(t *testing.T)
 	}
 	if audited := w.auditText(t); !strings.Contains(audited, `"event":"action_approved"`) || !strings.Contains(audited, `"approver":"`+admin+`"`) {
 		t.Fatalf("audit log:\n%s", audited)
+	}
+}
+
+// Beside a waiting action the page shows what state the entity is in now,
+// as text. Without an answer from Home Assistant the page still appears and
+// the action can still be decided.
+func TestWaitingActionShowsTheEntitysPresentState(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	w.tokens(t, policy.ProfileLocal)
+
+	if _, body := w.asAdmin(t, http.MethodGet, "/", nil); len(w.states.asked) != 0 || strings.Contains(body, "State now") {
+		t.Fatalf("states were read with nothing waiting: %v", w.states.asked)
+	}
+
+	parked := w.park(t, clientID, "Kitchen")
+	w.states.states["light.kitchen"] = "<i>off</i>"
+	_, body := w.asAdmin(t, http.MethodGet, "/", nil)
+	if !strings.Contains(body, "<dt>State now</dt><dd>&lt;i&gt;off&lt;/i&gt;</dd>") {
+		t.Fatalf("the page does not show the state as text:\n%s", body)
+	}
+	if got := w.states.asked; len(got) != 1 || len(got[0]) != 1 || got[0][0] != "light.kitchen" {
+		t.Fatalf("states asked for = %v", got)
+	}
+
+	delete(w.states.states, "light.kitchen")
+	if _, body := w.asAdmin(t, http.MethodGet, "/", nil); !strings.Contains(body, "<dt>State now</dt><dd>not known</dd>") {
+		t.Fatalf("an entity without a state is not shown as such:\n%s", body)
+	}
+
+	w.states.fail = true
+	resp, body := w.asAdmin(t, http.MethodGet, "/", nil)
+	if resp.status != http.StatusOK || !strings.Contains(body, "<dt>State now</dt><dd>not known</dd>") || !strings.Contains(body, `value="`+parked.ID+`"`) {
+		t.Fatalf("without states the action cannot be decided: %d\n%s", resp.status, body)
 	}
 }
 
