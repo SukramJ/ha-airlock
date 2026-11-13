@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -316,6 +315,20 @@ func (r *running) callToolWith(t *testing.T, accessToken, name string, args map[
 	return content.Text, result.IsError
 }
 
+// dismissals counts how often a notification was dismissed in the stand-in
+// Home Assistant.
+func (r *running) dismissals() int {
+	r.home.Mu.Lock()
+	defer r.home.Mu.Unlock()
+	n := 0
+	for _, s := range r.home.Services {
+		if s == "persistent_notification.dismiss" {
+			n++
+		}
+	}
+	return n
+}
+
 func (r *running) auditText(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(r.dataDir, "audit.jsonl")
@@ -557,17 +570,8 @@ func TestActionRunsOnlyAfterApprovalInTheSidebar(t *testing.T) {
 		return out
 	}
 
-	notices := func() string {
-		r.home.Mu.Lock()
-		defer r.home.Mu.Unlock()
-		var out []string
-		for _, s := range r.home.Services {
-			if s == "persistent_notification.dismiss" {
-				out = append(out, "dismiss")
-			}
-		}
-		return strings.Join(out, ",")
-	}
+	// The start took away whatever notice an earlier run left.
+	notices := func() int { return r.dismissals() - 1 }
 	// Provisioning announced the new user with a notification of its own.
 	r.home.Mu.Lock()
 	before := 0
@@ -593,8 +597,8 @@ func TestActionRunsOnlyAfterApprovalInTheSidebar(t *testing.T) {
 	if isError || !strings.HasPrefix(text, "NOT RUN YET") || len(services()) != 0 {
 		t.Fatalf("call before the approval: isError = %t, services %v, %s", isError, services(), text)
 	}
-	if created() != 1 || notices() != "" {
-		t.Fatalf("the owner was not told that an approval waits: %d notices created, dismissed %q", created(), notices())
+	if created() != 1 || notices() != 0 {
+		t.Fatalf("the owner was not told that an approval waits: %d notices created, %d dismissed", created(), notices())
 	}
 
 	shown := r.asAdmin(t, http.MethodGet, "/", nil).body
@@ -608,8 +612,8 @@ func TestActionRunsOnlyAfterApprovalInTheSidebar(t *testing.T) {
 		t.Fatalf("approve: status %d", got.status)
 	}
 
-	if created() != 1 || notices() != "dismiss" {
-		t.Fatalf("the notice was not taken away after the decision: %d created, dismissed %q", created(), notices())
+	if created() != 1 || notices() != 1 {
+		t.Fatalf("the notice was not taken away after the decision: %d created, %d dismissed", created(), notices())
 	}
 
 	text, isError = r.callToolWith(t, accessToken, "light_turn_on", args)
@@ -677,11 +681,8 @@ func TestWaitingActionExpiresOnTheRunningServerWithoutAFurtherCall(t *testing.T)
 	r.home.CoreResults["config/entity_registry/get"] = `{"labels":["airlock"],"name":"Desk","original_name":null}`
 	r.home.Mu.Unlock()
 	accessToken := r.authorize(t, "local")
-	dismissed := func() bool {
-		r.home.Mu.Lock()
-		defer r.home.Mu.Unlock()
-		return slices.Contains(r.home.Services, "persistent_notification.dismiss")
-	}
+	// One dismissal is the start's own.
+	dismissed := func() bool { return r.dismissals() > 1 }
 
 	if text, _ := r.callToolWith(t, accessToken, "light_turn_on", map[string]string{"entity_id": "light.desk"}); !strings.HasPrefix(text, "NOT RUN YET") {
 		t.Fatalf("the call was not parked: %s", text)
@@ -700,6 +701,17 @@ func TestWaitingActionExpiresOnTheRunningServerWithoutAFurtherCall(t *testing.T)
 			t.Fatalf("the expiry was not noticed: notice dismissed = %t, audit log:\n%s", dismissed(), r.auditText(t))
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// No waiting request outlives the server, so a notice that an earlier run
+// left in Home Assistant is taken away when the server starts.
+func TestStartTakesAwayANoticeLeftByAnEarlierRun(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, "")
+
+	if got := r.dismissals(); got != 1 {
+		t.Fatalf("notices dismissed at the start = %d, want 1", got)
 	}
 }
 
