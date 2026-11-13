@@ -98,6 +98,7 @@ type Summary struct {
 
 // Log appends to one audit file. It is safe for concurrent use.
 type Log struct {
+	path string
 	mu   sync.Mutex
 	file *os.File
 	seq  uint64
@@ -120,7 +121,7 @@ func Open(path string) (*Log, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
-	return &Log{file: file, seq: summary.Records, head: summary.Head, now: time.Now}, nil
+	return &Log{path: path, file: file, seq: summary.Records, head: summary.Head, now: time.Now}, nil
 }
 
 // Append writes one entry and returns once it is on stable storage.
@@ -186,6 +187,13 @@ func VerifyFile(path string) (Summary, error) {
 // Verify reads a log and checks every line against the chain. It returns
 // the first break it finds, wrapped around ErrBroken.
 func Verify(r io.Reader) (Summary, error) {
+	return walk(r, func(Record) error { return nil })
+}
+
+// walk reads a log, checks every line against the chain and hands each line
+// that holds to visit. It stops at the first break, wrapped around
+// ErrBroken, or at the first error visit returns.
+func walk(r io.Reader, visit func(Record) error) (Summary, error) {
 	summary := Summary{Head: genesis}
 	reader := bufio.NewReader(r)
 	for {
@@ -197,13 +205,92 @@ func Verify(r io.Reader) (Summary, error) {
 		if err != nil {
 			return summary, fmt.Errorf("%w: line %d: %w", ErrBroken, number, err)
 		}
-		hash, err := checkLine(raw, number, summary.Head)
+		record, err := checkLine(raw, number, summary.Head)
 		if err != nil {
 			return summary, fmt.Errorf("%w: line %d: %w", ErrBroken, number, err)
 		}
 		summary.Records = number
-		summary.Head = hash
+		summary.Head = record.Hash
+		if err := visit(record); err != nil {
+			return summary, err
+		}
 	}
+}
+
+// Record is one line of the log as it was written.
+type Record struct {
+	Seq  uint64
+	Time time.Time
+	Hash string
+	Entry
+}
+
+// Page is a part of the log read back.
+type Page struct {
+	// Records are the newest first.
+	Records []Record
+	// Verified is the number of lines, counted from the start of the log,
+	// whose chain holds.
+	Verified uint64
+}
+
+// maxPage bounds the number of records one Read returns.
+const maxPage = 500
+
+// Read returns up to limit records older than the one numbered before,
+// newest first; before 0 starts at the newest record.
+//
+// Every Read verifies the whole chain and compares its end with the last
+// line this Log wrote. A file that was changed, or cut short, while the
+// server runs is therefore reported, with an error wrapped around
+// ErrBroken; the page then holds the records up to the break. Lines appended
+// while Read runs are not part of its page.
+func (l *Log) Read(ctx context.Context, before uint64, limit int) (Page, error) {
+	limit = min(max(limit, 1), maxPage)
+	// What this Log has written is the anchor: reading stops there, so a
+	// line being written right now is never seen half.
+	l.mu.Lock()
+	seq, head := l.seq, l.head
+	info, err := l.file.Stat()
+	l.mu.Unlock()
+	if err != nil {
+		return Page{}, fmt.Errorf("read audit log: %w", err)
+	}
+	file, err := os.Open(l.path)
+	if err != nil {
+		return Page{}, fmt.Errorf("read audit log: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	// ring holds the last limit records seen, oldest at next.
+	ring := make([]Record, 0, limit)
+	next := 0
+	summary, err := walk(io.LimitReader(file, info.Size()), func(r Record) error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("read audit log: %w", err)
+		}
+		if before != 0 && r.Seq >= before {
+			return nil
+		}
+		if len(ring) < limit {
+			ring = append(ring, r)
+			return nil
+		}
+		ring[next] = r
+		next = (next + 1) % limit
+		return nil
+	})
+	page := Page{Verified: summary.Records, Records: make([]Record, 0, len(ring))}
+	for i := range ring {
+		page.Records = append(page.Records, ring[(next+len(ring)-1-i)%len(ring)])
+	}
+	switch {
+	case err != nil:
+		return page, err
+	case summary.Records != seq || summary.Head != head:
+		return page, fmt.Errorf("%w: the file holds %d lines, this server wrote %d and its last line is not the file's", ErrBroken, summary.Records, seq)
+	}
+	return page, nil
 }
 
 // readLine returns the next line without its newline. A last line that does
@@ -232,26 +319,26 @@ func readLine(reader *bufio.Reader) ([]byte, error) {
 }
 
 // checkLine verifies one line against its position and the hash before it,
-// and returns the line's hash.
-func checkLine(raw []byte, number uint64, prev string) (string, error) {
+// and returns the line.
+func checkLine(raw []byte, number uint64, prev string) (Record, error) {
 	var l line
 	if err := json.Unmarshal(raw, &l); err != nil {
-		return "", fmt.Errorf("not a JSON line: %w", err)
+		return Record{}, fmt.Errorf("not a JSON line: %w", err)
 	}
 	if hashOf(l.Entry) != l.Hash {
-		return "", errors.New("hash does not match the entry")
+		return Record{}, errors.New("hash does not match the entry")
 	}
 	var s stored
 	if err := json.Unmarshal(l.Entry, &s); err != nil {
-		return "", fmt.Errorf("entry is not valid: %w", err)
+		return Record{}, fmt.Errorf("entry is not valid: %w", err)
 	}
 	if s.Seq != number {
-		return "", fmt.Errorf("sequence number is %d", s.Seq)
+		return Record{}, fmt.Errorf("sequence number is %d", s.Seq)
 	}
 	if s.Prev != prev {
-		return "", errors.New("previous hash does not match the line before")
+		return Record{}, errors.New("previous hash does not match the line before")
 	}
-	return l.Hash, nil
+	return Record{Seq: s.Seq, Time: s.Time, Hash: l.Hash, Entry: s.Entry}, nil
 }
 
 func hashOf(b []byte) string {

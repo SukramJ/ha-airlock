@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/oauth"
 	"github.com/SukramJ/ha-airlock/internal/policy"
 )
@@ -64,7 +66,7 @@ func newWeb(t *testing.T) *web {
 	w.server.Register(publicMux)
 
 	w.halt = &fakeSwitch{}
-	consent, err := oauth.NewConsent(w.store, w.halt, logger)
+	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, logger)
 	if err != nil {
 		t.Fatalf("consent: %v", err)
 	}
@@ -471,5 +473,116 @@ func TestKillSwitchIsOperatedFromTheConsentPageByAnAdministrator(t *testing.T) {
 	}
 	if w.halt.engaged {
 		t.Fatal("the kill switch was operated without authority")
+	}
+}
+
+func TestAuditPageShowsTheLogToAdministratorsOnly(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	w.tokens(t, policy.ProfileLocal)
+
+	resp, body := w.asAdmin(t, http.MethodGet, "/audit", nil)
+	if resp.status != http.StatusOK || !strings.Contains(body, "client_approved") || !strings.Contains(body, "by "+admin) {
+		t.Fatalf("audit page: status %d\n%s", resp.status, body)
+	}
+	if !strings.Contains(body, "The chain holds") || strings.Contains(body, "not intact") {
+		t.Fatalf("the page does not report an intact log:\n%s", body)
+	}
+	if csp := resp.header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") || resp.header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("headers: %v", resp.header)
+	}
+
+	for name, c := range map[string][2]string{"no user": {"", ""}, "not admin": {"some-user", "system-users"}} {
+		if resp, body := w.consentRequest(t, http.MethodGet, "/audit", nil, c[0], c[1]); resp.status != http.StatusForbidden || strings.Contains(body, "client_approved") {
+			t.Errorf("%s: status %d, want 403 and no record", name, resp.status)
+		}
+	}
+	if resp, _ := w.asAdmin(t, http.MethodGet, "/audit?before=newest", nil); resp.status != http.StatusBadRequest {
+		t.Errorf("a record number that is none: status %d, want 400", resp.status)
+	}
+}
+
+// What the log holds was written by clients and by Home Assistant; the page
+// must show it as text.
+func TestAuditPageShowsRecordedTextAsTextNotAsMarkup(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	hostile := `<script>alert(1)</script><img src=x onerror=alert(2)>`
+	_, err := w.auditLog.Append(context.Background(), audit.Entry{
+		Event: "tool_call", Client: hostile, Tool: hostile, Decision: hostile, Approver: hostile, Result: hostile,
+		Arguments: json.RawMessage(`{"q":"</code><script>alert(3)</script>"}`),
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	_, body := w.asAdmin(t, http.MethodGet, "/audit", nil)
+
+	if strings.Contains(body, "<script") || strings.Contains(body, "<img") {
+		t.Fatalf("recorded text reached the page as markup:\n%s", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;alert(1)") || !strings.Contains(body, "alert(3)") {
+		t.Fatalf("the record is not shown:\n%s", body)
+	}
+}
+
+func TestAuditPageLeadsBackThroughOlderRecords(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	for range 130 {
+		if _, err := w.auditLog.Append(context.Background(), audit.Entry{Event: "tool_call", Tool: "system_log_list"}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	_, newest := w.asAdmin(t, http.MethodGet, "/audit", nil)
+	if !strings.Contains(newest, "<td>130</td>") || !strings.Contains(newest, "<td>31</td>") || strings.Contains(newest, "<td>30</td>") {
+		t.Fatalf("the newest page does not hold records 130 to 31:\n%s", newest)
+	}
+	if !strings.Contains(newest, `href="audit?before=31"`) {
+		t.Fatalf("the newest page has no link to older records:\n%s", newest)
+	}
+	_, older := w.asAdmin(t, http.MethodGet, "/audit?before=31", nil)
+	if !strings.Contains(older, "<td>30</td>") || !strings.Contains(older, "<td>1</td>") || strings.Contains(older, "<td>31</td>") || strings.Contains(older, "Older records") {
+		t.Fatalf("the older page does not hold records 30 to 1 and nothing else:\n%s", older)
+	}
+}
+
+func TestAuditPageShortensLongArguments(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	long := `{"q":"` + strings.Repeat("ä", 600) + `END"}`
+	if _, err := w.auditLog.Append(context.Background(), audit.Entry{Event: "tool_call", Arguments: json.RawMessage(long)}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	_, body := w.asAdmin(t, http.MethodGet, "/audit", nil)
+	if strings.Contains(body, "END") || !strings.Contains(body, "ää …") || strings.Contains(body, "\uFFFD") {
+		t.Fatalf("long arguments are not shortened cleanly:\n%s", body)
+	}
+}
+
+func TestAuditPageSaysWhenTheLogIsNotIntact(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	w.tokens(t, policy.ProfileLocal)
+	if _, err := w.auditLog.Append(context.Background(), audit.Entry{Event: "tool_call", Tool: "last_tool"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	data, err := os.ReadFile(w.auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(strings.TrimSuffix(string(data), "\n"), "\n")
+	if err := os.WriteFile(w.auditPath, []byte(strings.Join(lines[:len(lines)-1], "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, body := w.asAdmin(t, http.MethodGet, "/audit", nil)
+
+	if resp.status != http.StatusOK || !strings.Contains(body, "The audit log is not intact") || strings.Contains(body, "The chain holds") {
+		t.Fatalf("status %d\n%s", resp.status, body)
+	}
+	if !strings.Contains(body, "client_approved") || strings.Contains(body, "last_tool") {
+		t.Fatalf("the page does not show exactly the records that are left:\n%s", body)
 	}
 }

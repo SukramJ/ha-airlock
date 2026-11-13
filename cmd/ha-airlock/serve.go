@@ -165,7 +165,7 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	if err != nil {
 		return nil, err
 	}
-	consent, err := oauth.NewConsent(store, killSwitch, logger)
+	consent, err := oauth.NewConsent(store, killSwitch, auditLog, logger)
 	if err != nil {
 		return nil, err
 	}

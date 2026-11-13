@@ -4,9 +4,10 @@ ha-airlock records what it does in one file, one JSON line per event. Each
 line is tied to the line before it by a hash, so a change to the file shows
 when the file is checked.
 
-Nothing writes to this log yet except the tests; the tool chain that will
-record every call is not built. This page describes the format and the
-check, which exist.
+The server writes it: every tool call, refused ones included, every
+approval, denial and revocation of an application, every use of the kill
+switch, and the creation of ha-airlock's own Home Assistant user. In the
+App the file is `/data/audit.jsonl`.
 
 ## Format
 
@@ -41,6 +42,23 @@ line that does not fit and exits with status 1.
 
 The server runs the same check when it opens the log and refuses to append
 to a log that fails it.
+
+## Reading the log in Home Assistant
+
+The ha-airlock page in Home Assistant has a link "Audit log". It shows the
+records newest first, a hundred at a time, to administrators only. Times
+are UTC. Arguments longer than 400 bytes are shortened on the page; the
+file holds them in full.
+
+Every time the page is opened the server checks the whole chain, and
+compares the end of the file with the last line it wrote itself. So while
+the server runs, the page also reports lines cut off the end of the file,
+which the check of a file alone cannot. The comparison value lives in the
+server's memory: it does not survive a restart, and it does not help
+against someone who can change the running server.
+
+If the log is not intact the page says so, names the place, and shows the
+records before it.
 
 ## What the check shows, and what it does not
 
