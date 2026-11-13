@@ -59,8 +59,7 @@ func newFixture(t *testing.T) *fixture {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.notices = append(f.notices, waiting)
-	})
-	f.store.SetClock(func() time.Time {
+	}, func() time.Time {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return f.now

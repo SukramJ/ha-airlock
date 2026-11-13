@@ -110,7 +110,7 @@ func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture 
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	f := fixture{
-		auditPath: path, runs: map[catalog.Tier]*atomic.Int32{}, halted: &atomic.Bool{}, approvals: approval.New(log, nil),
+		auditPath: path, runs: map[catalog.Tier]*atomic.Int32{}, halted: &atomic.Bool{}, approvals: approval.New(log, nil, time.Now),
 		home: &home{
 			labels: map[string][]string{"light.kitchen": {"other", "airlock"}, "light.hall": {"airlock"}, "light.cellar": {"other"}},
 			names:  map[string]string{"light.kitchen": "Kitchen ceiling"},
