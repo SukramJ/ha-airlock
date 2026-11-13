@@ -48,12 +48,18 @@ type fixture struct {
 	log   *journal
 	now   time.Time
 	mu    sync.Mutex
+	// notices are what the store told its notify function, in order.
+	notices []bool
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{log: &journal{}, now: time.Unix(1_800_000_000, 0)}
-	f.store = approval.New(f.log)
+	f.store = approval.New(f.log, func(_ context.Context, waiting bool) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.notices = append(f.notices, waiting)
+	})
 	f.store.SetClock(func() time.Time {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -308,5 +314,62 @@ func TestOneClientCannotFillThePage(t *testing.T) {
 	// A request already waiting is still answered when the client is full.
 	if status, _ := f.resolve(t, request(t, "client-a", "light_turn_on", `{"entity_id":"light.l0"}`)); status != approval.Waiting {
 		t.Fatalf("a waiting request of a full client: status %d", status)
+	}
+}
+
+func (f *fixture) told() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return fmt.Sprint(f.notices)
+}
+
+// The notice follows whether anything waits: told once when the first
+// request arrives, once when the last one is decided or has expired.
+func TestNotifyIsToldWhenSomethingStartsToWaitAndWhenNothingWaitsAnyMore(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	one := request(t, "client-a", "light_turn_on", `{"entity_id":"light.one"}`)
+	two := request(t, "client-a", "light_turn_on", `{"entity_id":"light.two"}`)
+
+	f.resolve(t, one)
+	f.resolve(t, one)
+	f.resolve(t, two)
+	if got := f.told(); got != "[true]" {
+		t.Fatalf("after two requests: told %s, want [true]", got)
+	}
+	pending := f.store.Pending()
+	if err := f.store.Decide(context.Background(), pending[0].ID, true, "admin-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.told(); got != "[true]" {
+		t.Fatalf("one request still waits: told %s, want [true]", got)
+	}
+	if err := f.store.Decide(context.Background(), pending[1].ID, false, "admin-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.told(); got != "[true false]" {
+		t.Fatalf("after the last decision: told %s, want [true false]", got)
+	}
+	// Using the approval changes nothing about what waits.
+	f.resolve(t, one)
+	if got := f.told(); got != "[true false]" {
+		t.Fatalf("after the approved call ran: told %s", got)
+	}
+
+	// A request that expires is noticed by the sweep alone.
+	three := request(t, "client-a", "light_turn_on", `{"entity_id":"light.three"}`)
+	f.resolve(t, three)
+	f.advance(approval.WaitFor)
+	f.store.Sweep(context.Background())
+	if got := f.told(); got != "[true false true false]" {
+		t.Fatalf("after the expiry: told %s, want [true false true false]", got)
+	}
+	events := f.log.events()
+	if events[len(events)-1] != "action_expired" {
+		t.Fatalf("the sweep did not record the expiry: %v", events)
+	}
+	f.store.Sweep(context.Background())
+	if got := f.told(); got != "[true false true false]" {
+		t.Fatalf("a sweep with nothing to do told something: %s", got)
 	}
 }

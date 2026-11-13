@@ -39,8 +39,12 @@ approval** you see one box per call:
 
 **Approve** lets exactly this call run once, when the application repeats
 it within two minutes. **Deny** refuses it. A call you do not decide
-within five minutes expires. Nothing tells you that a call is waiting;
-you have to open the page.
+within five minutes expires.
+
+While a call is waiting, Home Assistant shows a notification from
+ha-airlock. It only says that something waits: you approve in the
+ha-airlock page, never in the notification. It disappears when nothing
+waits any more.
 
 What can be switched: entities of the domains `light`, `switch` and
 `input_boolean`, with `turn_on` and `turn_off`. There is no tool for

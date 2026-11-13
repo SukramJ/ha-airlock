@@ -9,7 +9,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -539,9 +541,44 @@ func TestActionRunsOnlyAfterApprovalInTheSidebar(t *testing.T) {
 		return out
 	}
 
+	notices := func() string {
+		r.home.Mu.Lock()
+		defer r.home.Mu.Unlock()
+		var out []string
+		for _, s := range r.home.Services {
+			if s == "persistent_notification.dismiss" {
+				out = append(out, "dismiss")
+			}
+		}
+		return strings.Join(out, ",")
+	}
+	// Provisioning announced the new user with a notification of its own.
+	r.home.Mu.Lock()
+	before := 0
+	for _, s := range r.home.Services {
+		if s == "persistent_notification.create" {
+			before++
+		}
+	}
+	r.home.Mu.Unlock()
+	created := func() int {
+		r.home.Mu.Lock()
+		defer r.home.Mu.Unlock()
+		n := 0
+		for _, s := range r.home.Services {
+			if s == "persistent_notification.create" {
+				n++
+			}
+		}
+		return n - before
+	}
+
 	text, isError := r.callToolWith(t, accessToken, "light_turn_on", args)
 	if isError || !strings.HasPrefix(text, "NOT RUN YET") || len(services()) != 0 {
 		t.Fatalf("call before the approval: isError = %t, services %v, %s", isError, services(), text)
+	}
+	if created() != 1 || notices() != "" {
+		t.Fatalf("the owner was not told that an approval waits: %d notices created, dismissed %q", created(), notices())
 	}
 
 	shown := r.asAdmin(t, http.MethodGet, "/", nil).body
@@ -552,6 +589,10 @@ func TestActionRunsOnlyAfterApprovalInTheSidebar(t *testing.T) {
 	}
 	if got := r.asAdmin(t, http.MethodPost, "/action", url.Values{"csrf": {token[1]}, "id": {id[1]}, "action": {"approve"}}); got.status != http.StatusOK {
 		t.Fatalf("approve: status %d", got.status)
+	}
+
+	if created() != 1 || notices() != "dismiss" {
+		t.Fatalf("the notice was not taken away after the decision: %d created, dismissed %q", created(), notices())
 	}
 
 	text, isError = r.callToolWith(t, accessToken, "light_turn_on", args)
@@ -602,5 +643,51 @@ func TestEntityWithoutTheOwnersLabelIsNotControlled(t *testing.T) {
 	}
 	if !strings.Contains(r.auditText(t), `"decision":"not_released"`) {
 		t.Fatal("the refusal is not recorded")
+	}
+}
+
+// noticeCore records the service calls of the approval notice.
+type noticeCore struct {
+	calls []string
+	fail  bool
+}
+
+func (c *noticeCore) Call(_ context.Context, command string, params, _ any) error {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	c.calls = append(c.calls, command+" "+string(raw))
+	if c.fail {
+		return errors.New("core is away")
+	}
+	return nil
+}
+
+// The notice says that something waits and nothing else: no action, no
+// entity, no application. It is one notification, replaced and dismissed
+// by its id.
+func TestApprovalNoticeNamesNothingAndIsOneNotification(t *testing.T) {
+	t.Parallel()
+	core := &noticeCore{}
+	var log safeBuffer
+	notify := approvalNotice(core, slog.New(slog.NewTextHandler(&log, nil)))
+
+	notify(context.Background(), true)
+	notify(context.Background(), false)
+
+	want := []string{
+		`call_service {"domain":"persistent_notification","service":"create","service_data":{"message":"An action is waiting for your approval. Open ha-airlock in Home Assistant to see it.","notification_id":"ha_airlock_approval","title":"ha-airlock"}}`,
+		`call_service {"domain":"persistent_notification","service":"dismiss","service_data":{"notification_id":"ha_airlock_approval"}}`,
+	}
+	if len(core.calls) != 2 || core.calls[0] != want[0] || core.calls[1] != want[1] {
+		t.Fatalf("calls =\n%s\nwant\n%s", strings.Join(core.calls, "\n"), strings.Join(want, "\n"))
+	}
+
+	// A notice that cannot be sent is logged; it stops nothing.
+	core.fail = true
+	notify(context.Background(), true)
+	if !strings.Contains(log.String(), "approval notice could not be updated") {
+		t.Fatalf("log = %s", log.String())
 	}
 }

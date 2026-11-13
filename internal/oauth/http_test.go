@@ -69,7 +69,7 @@ func newWeb(t *testing.T) *web {
 	w.server.Register(publicMux)
 
 	w.halt = &fakeSwitch{}
-	w.actions = approval.New(w.auditLog)
+	w.actions = approval.New(w.auditLog, nil)
 	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, w.actions, logger)
 	if err != nil {
 		t.Fatalf("consent: %v", err)

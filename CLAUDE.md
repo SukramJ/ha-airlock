@@ -33,8 +33,7 @@ Assistant App: one container beside Core.
   and six control tools (R1); `docs/tools.md` is generated from it. R1
   acts only on entities carrying the owner's label and, by default, after
   an approval in the sidebar page (ADR 0005). The sidebar page shows the
-  audit log. Not built: the notice that an approval waits, any tier above
-  R1. Other
+  audit log. Not built: any tier above R1. Other
   commands: `probe`, `provision`, `audit verify`.
 
 Every tool call passes one chain, in this order:

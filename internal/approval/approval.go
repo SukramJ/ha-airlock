@@ -99,18 +99,60 @@ type item struct {
 	expires time.Time
 }
 
+// Notify is told when the first request starts to wait and when the last
+// one stops. It learns nothing about the requests.
+type Notify func(ctx context.Context, waiting bool)
+
 // Store holds the requests. It is safe for concurrent use.
 type Store struct {
-	audit Appender
+	audit  Appender
+	notify Notify
 
 	mu    sync.Mutex
 	items map[string]*item // by Key
 	now   func() time.Time
+
+	// announceMu serialises calls of notify, so that they arrive in the
+	// order of the changes. announced is what notify was told last.
+	announceMu sync.Mutex
+	announced  bool
 }
 
 // New returns an empty store that records decisions in the audit log.
-func New(log Appender) *Store {
-	return &Store{audit: log, items: map[string]*item{}, now: time.Now}
+// notify may be nil.
+func New(log Appender, notify Notify) *Store {
+	return &Store{audit: log, notify: notify, items: map[string]*item{}, now: time.Now}
+}
+
+// announce tells notify whether something waits, if that changed. It is
+// called without the lock: notify may take its time.
+func (s *Store) announce(ctx context.Context) {
+	if s.notify == nil {
+		return
+	}
+	s.announceMu.Lock()
+	defer s.announceMu.Unlock()
+	s.mu.Lock()
+	now := s.now()
+	waiting := false
+	for _, it := range s.items {
+		waiting = waiting || (it.status == Waiting && now.Before(it.expires))
+	}
+	s.mu.Unlock()
+	if waiting != s.announced {
+		s.announced = waiting
+		s.notify(ctx, waiting)
+	}
+}
+
+// Sweep forgets what has expired, records it, and tells notify if nothing
+// waits any more. The server calls it from time to time, so that an expiry
+// does not wait for the next call to be noticed.
+func (s *Store) Sweep(ctx context.Context) {
+	s.mu.Lock()
+	s.prune(ctx, s.now())
+	s.mu.Unlock()
+	s.announce(ctx)
 }
 
 // Key returns the hash that binds an approval to a client, a tool and
@@ -152,6 +194,7 @@ func Key(client, tool string, args json.RawMessage) (string, error) {
 // An approval is reported once, with the administrator who gave it, and is
 // gone afterwards: the caller runs the call now or not at all.
 func (s *Store) Resolve(ctx context.Context, req *Request) (status Status, approver string, err error) {
+	defer s.announce(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -207,6 +250,7 @@ func (s *Store) Pending() []Request {
 // Decide records an administrator's decision on the waiting request with
 // the given ID. The decision takes effect only once it is in the audit log.
 func (s *Store) Decide(ctx context.Context, id string, approve bool, by string) error {
+	defer s.announce(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()

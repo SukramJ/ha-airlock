@@ -78,8 +78,11 @@ approved and not yet run.
 
 - The model must repeat a call. A client or model that does not do so
   never runs an action; none runs by accident.
-- The owner has to open ha-airlock to learn that something waits. The
-  notice ADR 0002 describes is not built.
+- While something waits, ha-airlock keeps one persistent notification in
+  Home Assistant, the notice ADR 0002 describes: it says that an action
+  waits and names neither the action nor the application. It is taken
+  away when nothing waits any more; an expiry is noticed within about
+  twenty seconds.
 - Who may assign labels in Home Assistant decides what can be controlled.
   Today that is every administrator. A future tool that changes labels
   would be a tool that widens its own reach, and must be treated as such.
