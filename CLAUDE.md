@@ -177,8 +177,10 @@ collaboration *can* happen, never that the running server *makes* it happen.
 The owner's Home Assistant instance runs real, in-use devices. **Reads are
 free. Writes need explicit approval, and the owner names the target** — a
 self-chosen "just another switch" can be a device that must not be cycled.
-No sanctioned test target is named yet; ask before the first write, and
-record the answer here.
+The sanctioned test target, named by the owner on 2026-11-13, is the
+helper `input_boolean.ha_airlock_test`: it controls no device and carries
+the label `airlock`. Switching it is approved; every other write still
+needs to be asked for.
 
 ---
 

@@ -9,9 +9,9 @@ the call.
 
 Give the entity the label **airlock** in Home Assistant (Settings →
 Devices & services → Entities → the entity → Labels). ha-airlock compares
-the label's id; for a label you name `airlock` in a fresh installation
-that is expected to be `airlock`, and the audit log tells you when it is
-not: a refused call is recorded with "does not carry the label".
+the label's id. A label created with the name `airlock` got the id
+`airlock` on Home Assistant 2026.11.1; if yours differs, the audit log
+shows it: a refused call is recorded with "does not carry the label".
 
 An entity without the label cannot be switched, whatever the policy says.
 The application is told that the entity is not released; it is not told

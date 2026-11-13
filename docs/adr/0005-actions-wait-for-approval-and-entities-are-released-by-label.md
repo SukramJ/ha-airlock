@@ -115,12 +115,29 @@ The owner approves a sentence. "Turn on switch.pump" is exact, and still
 only as good as the owner's knowledge of what that switch does. The page
 shows the entity's name beside its id; it does not show its state.
 
+## Measured
+
+On the owner's instance (Core 2026.11.1), 2026-11-13, with an
+administrator's token over Core's WebSocket API:
+
+- A label created with the name `airlock` got the id `airlock`.
+- `config/entity_registry/get` for the test helper returned
+  `labels: ["airlock"]`, `name: null` and `original_name`; for an entity
+  that does not exist it returned the error `not_found`.
+- `call_service` with `domain`, `service` and
+  `target: {"entity_id": ["input_boolean.ha_airlock_test"]}` — the shape
+  the tools send — switched the helper on and off; the state was read
+  back after each call.
+- `get_services` lists `turn_on` and `turn_off` for `light`, `switch` and
+  `input_boolean`.
+
 ## Unverified
 
 - That MCP clients show the text of a parked call to the model in a way
   that makes it repeat the call. No client has been connected yet.
-- How Home Assistant derives a label's id from its name. The policy
-  compares ids; the id of the owner's label is read from the instance,
-  not assumed.
-- The three services on a running Core. The command shape is read from
-  Core's source; the live call is the owner's test target.
+- The whole path on a running system: a call over MCP, the approval in
+  the sidebar page, the service called by ha-airlock's own user. The
+  measurements above were made beside ha-airlock, not through it.
+- How Home Assistant derives a label's id from a name other than the one
+  measured. The policy compares ids.
+- `light` and `switch` on a real device. Only the helper was switched.
