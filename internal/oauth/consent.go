@@ -335,10 +335,10 @@ func (c *Consent) revoke(w http.ResponseWriter, r *http.Request) {
 
 var consentPage = template.Must(template.New("consent").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>ha-airlock</title>
-<style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.5}
-section{border:1px solid #ccc;border-radius:.5rem;padding:1rem;margin:1rem 0}.code{font-size:1.6rem;letter-spacing:.15em;font-weight:600}
-.warn{color:#a40000}.msg{background:#eef;padding:.6rem 1rem;border-radius:.5rem}button{font-size:1rem;padding:.4rem .9rem;margin-right:.5rem}
-dt{font-weight:600}dd{margin:0 0 .4rem 0}small{color:#555}</style></head><body>
+<style>` + colours + `body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.5}
+section{border:1px solid var(--line);border-radius:.5rem;padding:1rem;margin:1rem 0}.code{font-size:1.6rem;letter-spacing:.15em;font-weight:600}
+.msg{background:var(--note);padding:.6rem 1rem;border-radius:.5rem}button{font-size:1rem;padding:.4rem .9rem;margin-right:.5rem}
+dt{font-weight:600}dd{margin:0 0 .4rem 0}</style></head><body>
 <h1>ha-airlock</h1>
 <p><a href="./">Reload</a> · <a href="audit">Audit log</a></p>
 {{if .Message}}<p class="msg">{{.Message}}</p>{{end}}
@@ -381,9 +381,9 @@ dt{font-weight:600}dd{margin:0 0 .4rem 0}small{color:#555}</style></head><body>
 
 var auditPage = template.Must(template.New("audit").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>ha-airlock — audit log</title>
-<style>body{font-family:system-ui,sans-serif;margin:2rem auto;padding:0 1rem;line-height:1.4;max-width:80rem}
-table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:.3rem .6rem;border-bottom:1px solid #ccc}
-td{overflow-wrap:anywhere}code{font-size:.85rem}.warn{color:#a40000}.ok{color:#1a6b1a}small{color:#555}</style></head><body>
+<style>` + colours + `body{font-family:system-ui,sans-serif;margin:2rem auto;padding:0 1rem;line-height:1.4;max-width:80rem}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:.3rem .6rem;border-bottom:1px solid var(--line)}
+td{overflow-wrap:anywhere}code{font-size:.85rem}</style></head><body>
 <h1>Audit log</h1>
 <p><a href="./">Back</a> · <a href="audit">Newest</a></p>
 {{if .Broken}}<p class="warn"><strong>The audit log is not intact.</strong> {{.Broken}}. The records below are the ones before the break.</p>

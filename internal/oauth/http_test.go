@@ -698,3 +698,42 @@ func TestActionIsDecidedOnlyByAnAdministratorThroughThePagesOwnForm(t *testing.T
 		t.Fatalf("the action was decided: status %d", got)
 	}
 }
+
+// Every page states its own colours for the light and the dark scheme, and
+// uses no colour outside them: a fixed dark text on whatever lies behind
+// the frame in Home Assistant is not readable.
+func TestEveryPageSetsItsColoursForLightAndDark(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	waitURL, _ := w.start(t)
+	_, waiting := w.get(t, waitURL)
+	_, consent := w.asAdmin(t, http.MethodGet, "/", nil)
+	_, auditView := w.asAdmin(t, http.MethodGet, "/audit", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, w.authorizeURL(func(q url.Values) { q.Set("client_id", "https://unknown.example/c") }), http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, refused := w.do(t, req)
+
+	fixed := regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b`)
+	for name, page := range map[string]string{"waiting": waiting, "consent": consent, "audit": auditView, "refused": refused} {
+		style, _, ok := strings.Cut(page, "</style>")
+		if !ok {
+			t.Errorf("%s: the page has no style", name)
+			continue
+		}
+		for _, want := range []string{"color-scheme:light dark", "prefers-color-scheme:dark", "background:var(--bg)", "color:var(--fg)"} {
+			if !strings.Contains(style, want) {
+				t.Errorf("%s: the style lacks %q", name, want)
+			}
+		}
+		// Colours are named once, in the two schemes; everything after uses them.
+		_, rest, _ := strings.Cut(style, "html,body{")
+		if found := fixed.FindString(rest); found != "" {
+			t.Errorf("%s: fixed colour %s outside the two schemes", name, found)
+		}
+		if strings.Contains(page[len(style):], "style=") {
+			t.Errorf("%s: an element sets its own style", name)
+		}
+	}
+}

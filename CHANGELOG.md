@@ -85,6 +85,12 @@ All notable changes to ha-airlock are recorded here. The format follows
   nothing waits. Expired requests are noticed and recorded within about
   twenty seconds.
 
+### Fixed
+
+- The pages were not readable in a dark colour scheme: they set dark text
+  and no background. Every page now sets its own background and colours
+  for the light and for the dark scheme.
+
 ### Changed
 
 - The minimum Go version is 1.27.4, which fixes GO-2026-6859 in `net/http`.
