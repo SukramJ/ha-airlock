@@ -55,11 +55,18 @@ func TestEveryToolIsFullyDeclared(t *testing.T) {
 		if len(tool.Endpoints) == 0 {
 			t.Errorf("tool %q declares no Home Assistant endpoint", tool.Name)
 		}
-		if tool.Handler == nil {
-			t.Errorf("tool %q has no handler", tool.Name)
+		// A tool that changes configuration works through its plan and
+		// has nothing else to run; every other tool has a handler, and
+		// states its action exactly when it is above R0.
+		changes := tool.Tier == catalog.R2
+		if (tool.Plan != nil) != changes || (tool.Kind != "") != changes || (tool.Handler == nil) != changes {
+			t.Errorf("tool %q (tier %s): a plan and a kind, and no handler, exactly for a tool of R2", tool.Name, tool.Tier)
 		}
-		if (tool.Act != nil) != (tool.Tier != catalog.R0) {
-			t.Errorf("tool %q (tier %s): a tool states its action exactly when it is above R0", tool.Name, tool.Tier)
+		if tool.Kind != "" && !slices.Contains(catalog.Kinds(), tool.Kind) {
+			t.Errorf("tool %q has kind %q, which is not a kind", tool.Name, tool.Kind)
+		}
+		if (tool.Act != nil) != (tool.Tier != catalog.R0 && !changes) {
+			t.Errorf("tool %q (tier %s): a tool states its action exactly when it is above R0 and has no plan", tool.Name, tool.Tier)
 		}
 		var schema struct {
 			Type                 string `json:"type"`

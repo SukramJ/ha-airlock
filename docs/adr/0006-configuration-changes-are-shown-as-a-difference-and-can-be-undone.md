@@ -2,8 +2,10 @@
 
 Status: accepted, 2026-11-13. The owner decided five points, named at the
 end of *Context*, and accepted the rest as proposed by the assistant.
-Built so far: the journal of changes (`internal/changes`) and the
-policy's part (`internal/policy`), neither used by a tool yet. Every part is to be measured on a running Home Assistant before
+Built so far: the journal of changes (`internal/changes`), the policy's
+part (`internal/policy`), the difference on the approval page and the
+gate's step for a change (`internal/gate`). No tool of tier R2 exists
+yet, and the running server has no journal. Every part is to be measured on a running Home Assistant before
 the next part is built on it; a measurement that contradicts this record
 amends it.
 
@@ -99,10 +101,11 @@ identifier and never a name the client chose.
 
 **The approval is bound to the state before.** The key of ADR 0005 —
 client, tool, arguments — is extended by the SHA-256 of the state before.
-Before a change runs, the gate reads the object again. If it differs from
-what the owner was shown, the change does not run, the approval is used
-up, and the client is told to call again; the owner is then shown the new
-difference.
+On every call the gate reads the object and builds the key from what it
+read. A repetition that finds the object as the owner was shown it has the
+approved key and runs. One that finds it changed has another key: nothing
+runs, the call is parked as a new request with the new difference, and
+the approval that was given expires unused.
 
 **A change is recorded with both states, and an administrator can undo
 it.** Before the write the gate stores before and after in a journal of
@@ -112,7 +115,8 @@ states, not the states. The sidebar page lists the changes, newest first,
 each with **Undo**. An undo writes the state before back. It is offered
 only while the object still equals the state after; otherwise the page
 shows that it has changed since and offers nothing. An undo is an audit
-record with the administrator's user id. No tool undoes anything: a
+record with the administrator's user id. A write that failed after it was
+recorded stays in the journal, marked as failed. No tool undoes anything: a
 client that wants a change back asks for the opposite change and waits
 for an approval like for any other. The journal keeps the last 200
 changes.

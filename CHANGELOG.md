@@ -86,6 +86,11 @@ All notable changes to ha-airlock are recorded here. The format follows
   twenty seconds.
 - The approval page shows, beside a waiting action, the state its entity
   is in at that moment.
+- The gate knows how a configuration change runs, ahead of the tools: the
+  policy for the kind, the tool's plan read from Home Assistant, the
+  release of the object, an approval bound to the state that was read,
+  the journal, then the write; what was created is given the control
+  label (ADR 0006).
 - The policy file knows tier R2's rules, ahead of the tools: R2 cannot be
   set to `allow`, and a `configuration` object switches each kind of
   configuration on (`approval`) or off and says whether its objects are

@@ -18,6 +18,7 @@ import (
 	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/catalog"
+	"github.com/SukramJ/ha-airlock/internal/changes"
 	"github.com/SukramJ/ha-airlock/internal/gate"
 	"github.com/SukramJ/ha-airlock/internal/policy"
 )
@@ -35,7 +36,22 @@ func probeTool(tier catalog.Tier, runs *atomic.Int32) catalog.Tool {
 			return json.RawMessage(`{"password":"` + secretInResult + `","state":"on"}`), nil
 		},
 	}
-	if tier != catalog.R0 {
+	switch tier {
+	case catalog.R0:
+	case catalog.R2:
+		// A tool that changes configuration has a plan and nothing else.
+		run := tool.Handler
+		tool.Handler, tool.Kind = nil, catalog.KindHelper
+		tool.Plan = func(context.Context, catalog.Core, json.RawMessage) (catalog.Change, error) {
+			return catalog.Change{
+				Summary: "Probe tier R2", After: json.RawMessage(`{"probe":true}`),
+				Apply: func(ctx context.Context, core catalog.Core) (string, json.RawMessage, error) {
+					result, err := run(ctx, core, nil)
+					return "", result, err
+				},
+			}, nil
+		}
+	default:
 		tool.Act = func(json.RawMessage) (catalog.Action, error) {
 			return catalog.Action{Summary: "Probe tier " + string(tier)}, nil
 		}
@@ -74,9 +90,26 @@ func (h *home) Call(_ context.Context, command string, params, out any) error {
 	case "call_service":
 		h.services = append(h.services, string(raw))
 		return json.Unmarshal([]byte(`{"context":{"id":"01J"}}`), out)
+	case "config/entity_registry/update":
+		var p struct {
+			EntityID string   `json:"entity_id"`
+			Labels   []string `json:"labels"`
+		}
+		_ = json.Unmarshal(raw, &p)
+		if _, ok := h.labels[p.EntityID]; !ok {
+			return errors.New("home assistant command failed: not_found: Entity not found")
+		}
+		h.labels[p.EntityID] = p.Labels
+		return nil
 	default:
 		return errors.New("unexpected command " + command)
 	}
+}
+
+func (h *home) labelsOf(entity string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.labels[entity]...)
 }
 
 func (h *home) setLabels(entity string, labels ...string) {
@@ -98,7 +131,10 @@ type fixture struct {
 	// halted is the kill switch of the test.
 	halted    *atomic.Bool
 	approvals *approval.Store
-	home      *home
+	journal   *changes.Journal
+	// journalDir holds the journal's file.
+	journalDir string
+	home       *home
 }
 
 func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture {
@@ -116,6 +152,15 @@ func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture 
 			names:  map[string]string{"light.kitchen": "Kitchen ceiling"},
 		},
 	}
+	f.journalDir = filepath.Join(t.TempDir(), "journal")
+	if err := os.Mkdir(f.journalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := changes.Open(filepath.Join(f.journalDir, "changes.json"), time.Now)
+	if err != nil {
+		t.Fatalf("open journal: %v", err)
+	}
+	f.journal = journal
 	tools := append([]catalog.Tool{}, extra...)
 	tools = append(tools, catalog.All()...)
 	for _, tier := range catalog.Tiers() {
@@ -124,6 +169,7 @@ func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture 
 	}
 	f.gate = gate.New(gate.Config{
 		Policy: pol, Audit: log, Core: f.home, Tools: tools, Timeout: 5 * time.Second, Halted: f.halted.Load, Approvals: f.approvals,
+		Journal: f.journal,
 	})
 	return f
 }
@@ -162,6 +208,9 @@ func parsePolicy(t *testing.T, text string) policy.Policy {
 	}
 	return p
 }
+
+// changePolicy lets the local profile change helpers, with approval.
+const changePolicy = `{"version":1,"profiles":{"local":{"R2":"approval"}},"configuration":{"local":{"helper":{"change":"approval"}}}}`
 
 var localClient = &gate.Principal{Client: "client-a", Profile: policy.ProfileLocal}
 
@@ -258,7 +307,8 @@ func TestATierOpenedInThePolicyRuns(t *testing.T) {
 	t.Parallel()
 	for _, tier := range catalog.Tiers() {
 		if tier == catalog.R2 {
-			f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"remote":{"R2":"approval"}}}`))
+			f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"remote":{"R2":"approval"}},`+
+				`"configuration":{"remote":{"helper":{"change":"approval"}}}}`))
 			out, err := f.gate.Call(context.Background(), &gate.Principal{Client: "c", Profile: policy.ProfileRemote}, "probe_R2", nil)
 			if err != nil || !out.Waiting || out.Allowed || f.runs[tier].Load() != 0 {
 				t.Errorf("R2 with approval: %v, outcome %+v, runs = %d", err, out, f.runs[tier].Load())
@@ -705,7 +755,8 @@ func TestApprovedCallDoesNotRunWhileTheKillSwitchIsEngaged(t *testing.T) {
 // approved waits like an action.
 func TestApprovalWorksForATierWithoutEntities(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R0":"approval","R2":"approval"}}}`))
+	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R0":"approval","R2":"approval"}},`+
+		`"configuration":{"local":{"helper":{"change":"approval"}}}}`))
 	for tier, summary := range map[catalog.Tier]string{catalog.R0: "Run probe_R0", catalog.R2: "Probe tier R2"} {
 		if out := f.call(t, localClient, "probe_"+string(tier), `{}`); !out.Waiting || f.runs[tier].Load() != 0 {
 			t.Fatalf("%s: %+v", tier, out)
@@ -755,7 +806,7 @@ func TestCallThatNeedsApprovalIsRefusedWhereNoneCanBeGiven(t *testing.T) {
 
 func TestClientWithTooManyWaitingCallsIsToldSo(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, parsePolicy(t, `{"version":1,"profiles":{"local":{"R2":"approval"}}}`))
+	f := newFixture(t, parsePolicy(t, changePolicy))
 	var last gate.Outcome
 	for i := range 6 {
 		last = f.call(t, localClient, "probe_R2", `{"n":`+string(rune('0'+i))+`}`)
