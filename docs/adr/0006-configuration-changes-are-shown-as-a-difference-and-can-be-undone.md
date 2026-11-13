@@ -2,10 +2,10 @@
 
 Status: accepted, 2026-11-13. The owner decided five points, named at the
 end of *Context*, and accepted the rest as proposed by the assistant.
-Built so far: step 1 of the order of building without undo — the journal,
-the policy's part, the difference on the approval page, the gate's step
-for a change, and the tools for `input_boolean` helpers. Not built: undo
-in the sidebar page, and everything from step 2 on. What was measured on
+Built so far: step 1 of the order of building — the journal, the policy's
+part, the difference on the approval page, the gate's step for a change,
+the tools for `input_boolean` helpers, and undo in the sidebar page. Not
+built: everything from step 2 on. What was measured on
 a running Home Assistant is under *Measured*. Every part is to be measured on a running Home Assistant before
 the next part is built on it; a measurement that contradicts this record
 amends it.
@@ -113,9 +113,13 @@ it.** Before the write the gate stores before and after in a journal of
 changes in the App's data directory; without that record the write does
 not happen. The audit record of the call carries the hashes of both
 states, not the states. The sidebar page lists the changes, newest first,
-each with **Undo**. An undo writes the state before back. It is offered
-only while the object still equals the state after; otherwise the page
-shows that it has changed since and offers nothing. An undo is an audit
+each with **Undo**. An undo writes the state before back, through the
+gate: the tool that made the change plans the way back, the gate reads
+the object, and writes only if it still equals the state after. That is
+checked when the undo is asked for, not when the page is drawn; if the
+object has changed since, nothing is written and the page says so. The
+undo asks neither the policy nor for an approval, and works while the
+kill switch is engaged. An undo is an audit
 record with the administrator's user id. A write that failed after it was
 recorded stays in the journal, marked as failed. No tool undoes anything: a
 client that wants a change back asks for the opposite change and waits
@@ -194,10 +198,10 @@ them. They are not limited to released objects.
 - **Helpers** — `input_boolean`, `input_number`, `input_text`,
   `input_select`, `input_datetime`, `input_button`, `counter`, `timer`:
   create, update, delete, with the fields of each domain's storage schema.
-  A deletion is to store the helper's registry entry with it, so that the
-  undo can create the helper again and restore name, area and the release
-  label. As built, a deletion stores the helper's configuration only; the
-  registry entry comes with the undo.
+  A deletion notes whether the helper carried the release label; the undo
+  creates the helper again and gives the label back. The name and the
+  area the owner gave the entity are not stored and not restored; this is
+  less than this record first said.
 - **Areas**: create and update of name, icon, floor, aliases and picture.
   Delete only for an area nothing is assigned to; the entities and devices
   of an area lose their assignment when it goes, and the journal does not
@@ -377,6 +381,7 @@ Not measured:
   so the request was shown; whether the table read as intended was not
   reported.
 - The journal file on the instance; it is in the App's private data.
+- Undo on a running system.
 - A change against an object that was altered after the approval, and a
   failed write, on a running system.
 

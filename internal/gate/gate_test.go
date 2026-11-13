@@ -42,6 +42,9 @@ func probeTool(tier catalog.Tier, runs *atomic.Int32) catalog.Tool {
 		// A tool that changes configuration has a plan and nothing else.
 		run := tool.Handler
 		tool.Handler, tool.Kind = nil, catalog.KindHelper
+		tool.Revert = func(context.Context, catalog.Core, string, json.RawMessage, json.RawMessage) (catalog.Change, error) {
+			return catalog.Change{}, errors.New("the probe has no way back")
+		}
 		tool.Plan = func(context.Context, catalog.Core, json.RawMessage) (catalog.Change, error) {
 			return catalog.Change{
 				Summary: "Probe tier R2", After: json.RawMessage(`{"probe":true}`),

@@ -36,8 +36,8 @@ Assistant App: one container beside Core.
   default, after an approval in the sidebar page (ADR 0005). R2 is off
   until the policy file opens a kind, never runs without an approval, and
   is recorded in the journal of changes first (ADR 0006). The sidebar page
-  shows the audit log. Not built: undo, the other kinds of R2, any tier
-  above R2. Other
+  shows the audit log and the changes, with undo. Not built: the other
+  kinds of R2, any tier above R2. Other
   commands: `probe`, `provision`, `audit verify`.
 
 Every tool call passes one chain, in this order:

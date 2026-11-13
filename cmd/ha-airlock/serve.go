@@ -67,6 +67,17 @@ func (e entityStates) States(ctx context.Context, ids []string) (map[string]stri
 	return out, nil
 }
 
+// changeLog is the journal of changes as the sidebar page uses it: the
+// list comes from the journal, and an undo goes through the gate.
+type changeLog struct {
+	journal *changes.Journal
+	gate    *gate.Gate
+}
+
+func (c changeLog) List() []changes.Change { return c.journal.List() }
+
+func (c changeLog) Undo(ctx context.Context, id, by string) error { return c.gate.Undo(ctx, id, by) }
+
 // approvalNotice returns what tells the owner, in Home Assistant, that an
 // approval is waiting, and takes the notice away when none is. The notice
 // names neither the action nor the application, and carries no button: an
@@ -246,7 +257,16 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	notice(ctx, false)
 	approvals := approval.New(auditLog, notice, env.now)
 	a.sweep = approvals.Sweep
-	consent, err := oauth.NewConsent(store, killSwitch, auditLog, approvals, entityStates{core}, logger)
+	journal, err := changes.Open(filepath.Join(env.dataDir, "changes.json"), env.now)
+	if err != nil {
+		return nil, err
+	}
+	tools := catalog.All()
+	g := gate.New(gate.Config{
+		Policy: pol, Audit: auditLog, Core: core, Tools: tools,
+		Timeout: toolTimeout, Halted: killSwitch.Engaged, Approvals: approvals, Journal: journal,
+	})
+	consent, err := oauth.NewConsent(store, killSwitch, auditLog, approvals, entityStates{core}, changeLog{journal, g}, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -271,15 +291,6 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 		return a, nil
 	}
 
-	journal, err := changes.Open(filepath.Join(env.dataDir, "changes.json"), env.now)
-	if err != nil {
-		return nil, err
-	}
-	tools := catalog.All()
-	g := gate.New(gate.Config{
-		Policy: pol, Audit: auditLog, Core: core, Tools: tools,
-		Timeout: toolTimeout, Halted: killSwitch.Engaged, Approvals: approvals, Journal: journal,
-	})
 	authz := oauth.NewServer(store, env.clientMetadata, opts.PublicURL, logger)
 	publicMux := http.NewServeMux()
 	authz.Register(publicMux)

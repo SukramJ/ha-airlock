@@ -68,9 +68,58 @@ func (h *helpers) tools(f *fixture) []catalog.Tool {
 			return entity, json.RawMessage(`{"password":"` + secretInResult + `","done":true}`), nil
 		}
 	}
+	// replace plans putting the object into the given state; an empty
+	// state deletes it.
+	replace := func(object string, state json.RawMessage) (catalog.Change, error) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		present, ok := h.states[object]
+		if !ok {
+			return catalog.Change{}, errors.New("there is no such helper")
+		}
+		apply := write(object, string(state))
+		if len(state) == 0 {
+			apply = func(context.Context, catalog.Core) (string, json.RawMessage, error) {
+				h.mu.Lock()
+				defer h.mu.Unlock()
+				delete(h.states, object)
+				return object, json.RawMessage(`{}`), nil
+			}
+		}
+		return catalog.Change{Summary: "Take back", Object: object, Entity: object, Before: json.RawMessage(present), After: state, Apply: apply}, nil
+	}
 	return []catalog.Tool{
 		{
+			Name: "helper_drop", Tier: catalog.R2, Kind: catalog.KindHelper,
+			Plan: func(_ context.Context, _ catalog.Core, args json.RawMessage) (catalog.Change, error) {
+				entity, _, err := decode(args)
+				if err != nil {
+					return catalog.Change{}, err
+				}
+				return replace(entity, nil)
+			},
+			// A deletion is taken back by creating the helper again; Home
+			// Assistant registers its entity without labels.
+			Revert: func(_ context.Context, _ catalog.Core, object string, before, _ json.RawMessage) (catalog.Change, error) {
+				h.mu.Lock()
+				defer h.mu.Unlock()
+				if _, ok := h.states[object]; ok {
+					return catalog.Change{}, errors.New("it exists again")
+				}
+				return catalog.Change{Summary: "Create again", After: before, Apply: func(context.Context, catalog.Core) (string, json.RawMessage, error) {
+					h.mu.Lock()
+					defer h.mu.Unlock()
+					h.states[object] = string(before)
+					f.home.setLabels(object)
+					return object, json.RawMessage(`{}`), nil
+				}}, nil
+			},
+		},
+		{
 			Name: "helper_set", Tier: catalog.R2, Kind: catalog.KindHelper,
+			Revert: func(_ context.Context, _ catalog.Core, object string, before, _ json.RawMessage) (catalog.Change, error) {
+				return replace(object, before)
+			},
 			Plan: func(_ context.Context, _ catalog.Core, args json.RawMessage) (catalog.Change, error) {
 				entity, after, err := decode(args)
 				if err != nil {
@@ -91,6 +140,9 @@ func (h *helpers) tools(f *fixture) []catalog.Tool {
 		},
 		{
 			Name: "helper_new", Tier: catalog.R2, Kind: catalog.KindHelper,
+			Revert: func(_ context.Context, _ catalog.Core, object string, _, _ json.RawMessage) (catalog.Change, error) {
+				return replace(object, nil)
+			},
 			Plan: func(_ context.Context, _ catalog.Core, args json.RawMessage) (catalog.Change, error) {
 				_, after, err := decode(args)
 				if err != nil {
@@ -341,12 +393,16 @@ func TestToolOfR2ThatDoesNotDeclareItsChangeIsRefused(t *testing.T) {
 			return "", json.RawMessage(`{}`), nil
 		}}, nil
 	}
+	back := func(context.Context, catalog.Core, string, json.RawMessage, json.RawMessage) (catalog.Change, error) {
+		return catalog.Change{}, nil
+	}
 	cases := map[string]catalog.Tool{
-		"no plan":           {Tier: catalog.R2, Kind: catalog.KindHelper, Handler: run},
-		"no kind":           {Tier: catalog.R2, Plan: plan},
-		"a handler as well": {Tier: catalog.R2, Kind: catalog.KindHelper, Plan: plan, Handler: run},
-		"an action as well": {Tier: catalog.R2, Kind: catalog.KindHelper, Plan: plan, Act: func(json.RawMessage) (catalog.Action, error) { return catalog.Action{}, nil }},
-		"a plan that is empty": {Tier: catalog.R2, Kind: catalog.KindHelper, Plan: func(context.Context, catalog.Core, json.RawMessage) (catalog.Change, error) {
+		"no plan":           {Tier: catalog.R2, Kind: catalog.KindHelper, Handler: run, Revert: back},
+		"no kind":           {Tier: catalog.R2, Plan: plan, Revert: back},
+		"no way back":       {Tier: catalog.R2, Kind: catalog.KindHelper, Plan: plan},
+		"a handler as well": {Tier: catalog.R2, Kind: catalog.KindHelper, Plan: plan, Revert: back, Handler: run},
+		"an action as well": {Tier: catalog.R2, Kind: catalog.KindHelper, Plan: plan, Revert: back, Act: func(json.RawMessage) (catalog.Action, error) { return catalog.Action{}, nil }},
+		"a plan that is empty": {Tier: catalog.R2, Kind: catalog.KindHelper, Revert: back, Plan: func(context.Context, catalog.Core, json.RawMessage) (catalog.Change, error) {
 			return catalog.Change{Summary: "x"}, nil
 		}},
 	}
@@ -383,4 +439,151 @@ type unrecorded struct{}
 
 func (unrecorded) Append(context.Context, audit.Entry) (audit.Receipt, error) {
 	return audit.Receipt{}, nil
+}
+
+// made runs one change through approval and returns its journal entry.
+func made(t *testing.T, f *fixture, tool, args string) changes.Change {
+	t.Helper()
+	f.call(t, localClient, tool, args)
+	f.decide(t, true)
+	if out := f.call(t, localClient, tool, args); !out.Allowed || out.Output == nil {
+		t.Fatalf("%s did not run: %+v", tool, out)
+	}
+	return f.journal.List()[0]
+}
+
+func lastRecord(t *testing.T, f *fixture) map[string]any {
+	t.Helper()
+	records := f.records(t)
+	return records[len(records)-1]
+}
+
+func TestUndoWritesTheStateBeforeBackOnceAndIsRecorded(t *testing.T) {
+	t.Parallel()
+	f, h := changing(t, changePolicy)
+	change := made(t, f, "helper_set", setGuest)
+
+	if err := f.gate.Undo(context.Background(), change.ID, "admin-1"); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+
+	if h.state("input_boolean.guest") != `{"name":"Guests"}` {
+		t.Fatalf("state after the undo = %s", h.state("input_boolean.guest"))
+	}
+	if got, _ := f.journal.Get(change.ID); got.Undone == nil || got.Undone.By != "admin-1" {
+		t.Fatalf("journal after the undo = %+v", got)
+	}
+	r := lastRecord(t, f)
+	if r["event"] != "change_undone" || r["approver"] != "admin-1" || r["tool"] != "helper_set" || r["client"] != localClient.Client ||
+		r["result"] != "ok: change "+change.ID+" undone, object input_boolean.guest" {
+		t.Fatalf("audit record = %v", r)
+	}
+
+	h.set("input_boolean.guest", `{"name":"Visitors"}`)
+	if err := f.gate.Undo(context.Background(), change.ID, "admin-1"); !errors.Is(err, changes.ErrUndone) {
+		t.Fatalf("second undo: %v", err)
+	}
+	if h.state("input_boolean.guest") != `{"name":"Visitors"}` {
+		t.Fatal("a change was undone twice")
+	}
+}
+
+// An undo is for the object as the change left it. If someone has changed
+// it since, writing the earlier state back would undo their work too.
+func TestUndoWritesNothingIfTheObjectHasChangedSince(t *testing.T) {
+	t.Parallel()
+	f, h := changing(t, changePolicy)
+	change := made(t, f, "helper_set", setGuest)
+	h.set("input_boolean.guest", `{"name":"Renamed by hand"}`)
+
+	err := f.gate.Undo(context.Background(), change.ID, "admin-1")
+
+	if !errors.Is(err, gate.ErrChangedSince) || h.state("input_boolean.guest") != `{"name":"Renamed by hand"}` {
+		t.Fatalf("undo: %v, state %s", err, h.state("input_boolean.guest"))
+	}
+	if got, _ := f.journal.Get(change.ID); got.Undone != nil {
+		t.Fatal("the journal says the change was undone")
+	}
+	r := lastRecord(t, f)
+	if result, _ := r["result"].(string); r["event"] != "change_undone" || !strings.HasPrefix(result, "not undone: ") {
+		t.Fatalf("audit record = %v", r)
+	}
+}
+
+func TestUndoOfACreationDeletesWhatWasCreated(t *testing.T) {
+	t.Parallel()
+	f, h := changing(t, changePolicy)
+	change := made(t, f, "helper_new", `{"name":"Party"}`)
+
+	if err := f.gate.Undo(context.Background(), change.ID, "admin-1"); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+
+	h.mu.Lock()
+	_, exists := h.states["input_boolean.new"]
+	h.mu.Unlock()
+	if exists {
+		t.Fatal("the created object is still there")
+	}
+}
+
+// A deleted object comes back with the control label exactly if it carried
+// it when it was deleted.
+func TestUndoOfADeletionCreatesTheObjectAgainWithTheLabelItCarried(t *testing.T) {
+	t.Parallel()
+	all := `{"version":1,"profiles":{"local":{"R2":"approval"}},"configuration":{"local":{"helper":{"change":"approval","release":"all"}}}}`
+	for entity, want := range map[string]string{"input_boolean.guest": "airlock", "input_boolean.private": ""} {
+		f, h := changing(t, all)
+		change := made(t, f, "helper_drop", `{"entity_id":"`+entity+`"}`)
+		if change.Released != (want != "") {
+			t.Fatalf("%s: journal says released = %t", entity, change.Released)
+		}
+
+		if err := f.gate.Undo(context.Background(), change.ID, "admin-1"); err != nil {
+			t.Fatalf("%s: undo: %v", entity, err)
+		}
+
+		if h.state(entity) == "" {
+			t.Fatalf("%s was not created again", entity)
+		}
+		if got := strings.Join(f.home.labelsOf(entity), ","); got != want {
+			t.Errorf("%s: labels after the undo = %q, want %q", entity, got, want)
+		}
+	}
+}
+
+func TestThereIsNothingToUndoForAChangeThatWasNotMade(t *testing.T) {
+	t.Parallel()
+	f, h := changing(t, changePolicy)
+	h.fail = errors.New("home assistant refused")
+	f.call(t, localClient, "helper_set", setGuest)
+	f.decide(t, true)
+	f.call(t, localClient, "helper_set", setGuest)
+	h.mu.Lock()
+	h.fail = nil
+	h.mu.Unlock()
+	failed := f.journal.List()[0]
+
+	if err := f.gate.Undo(context.Background(), failed.ID, "admin-1"); !errors.Is(err, gate.ErrNotMade) {
+		t.Fatalf("undo of a failed change: %v", err)
+	}
+	if err := f.gate.Undo(context.Background(), "no-such-change", "admin-1"); !errors.Is(err, changes.ErrUnknown) {
+		t.Fatalf("undo of an unknown change: %v", err)
+	}
+	if h.state("input_boolean.guest") != `{"name":"Guests"}` {
+		t.Fatal("something was written")
+	}
+}
+
+// Taking a change back is the administrator's way out: it works while the
+// kill switch is engaged.
+func TestUndoWorksWhileTheServerIsHalted(t *testing.T) {
+	t.Parallel()
+	f, h := changing(t, changePolicy)
+	change := made(t, f, "helper_set", setGuest)
+	f.halted.Store(true)
+
+	if err := f.gate.Undo(context.Background(), change.ID, "admin-1"); err != nil || h.state("input_boolean.guest") != `{"name":"Guests"}` {
+		t.Fatalf("undo while halted: %v, state %s", err, h.state("input_boolean.guest"))
+	}
 }

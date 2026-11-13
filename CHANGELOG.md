@@ -86,6 +86,10 @@ All notable changes to ha-airlock are recorded here. The format follows
   twenty seconds.
 - The approval page shows, beside a waiting action, the state its entity
   is in at that moment.
+- **Undo.** The sidebar page lists the last twenty configuration changes
+  with what was there before and after, and an administrator can take one
+  back there. Nothing is written if the object has changed since. An
+  application cannot undo. See `docs/changing-configuration.md`.
 - ADR 0006 records the first configuration changes on a real system: a
   toggle helper created, changed and deleted through ha-airlock, each
   after the owner's approval.

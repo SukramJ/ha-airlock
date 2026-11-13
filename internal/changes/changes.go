@@ -56,6 +56,9 @@ type Change struct {
 	// object as the change leaves it; absent for a deletion.
 	Before json.RawMessage `json:"before,omitempty"`
 	After  json.RawMessage `json:"after,omitempty"`
+	// Released says that the object carried the control label when it was
+	// changed. An undo that creates it again gives the label back.
+	Released bool `json:"released,omitempty"`
 	// Failed says why the write did not happen, if it did not. The change
 	// stays in the journal: it was approved and attempted.
 	Failed string `json:"failed,omitempty"`

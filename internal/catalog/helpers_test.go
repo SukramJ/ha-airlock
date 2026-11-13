@@ -249,3 +249,56 @@ func TestHelperToolsRefuseWhatTheyDoNotDeclare(t *testing.T) {
 		}
 	}
 }
+
+// Each tool of tier R2 plans the way back from a change it made: what was
+// created is deleted, what was changed gets its recorded state again, what
+// was deleted is created again.
+func TestHelperToolsPlanTheWayBack(t *testing.T) {
+	t.Parallel()
+	revert := func(home *helperHome, name, object, before, after string) (catalog.Change, error) {
+		tool, _ := catalog.Lookup(name)
+		return tool.Revert(context.Background(), home, object, json.RawMessage(before), json.RawMessage(after))
+	}
+
+	home := newHelperHome()
+	change, err := revert(home, "input_boolean_create", "input_boolean.party", "", `{"name":"Party"}`)
+	if err != nil || string(change.Before) != `{"name":"Party"}` || len(change.After) != 0 {
+		t.Fatalf("back from a creation: %+v, %v", change, err)
+	}
+	if _, _, err := change.Apply(context.Background(), home); err != nil || len(home.writes()) != 1 || home.writes()[0] != `input_boolean/delete {"input_boolean_id":"party"}` {
+		t.Fatalf("writes = %v, %v", home.writes(), err)
+	}
+
+	home = newHelperHome()
+	change, err = revert(home, "input_boolean_update", "input_boolean.guests", `{"name":"Earlier","initial":true}`, `{"icon":"mdi:account","name":"Guest mode"}`)
+	if err != nil || string(change.Before) != `{"icon":"mdi:account","name":"Guest mode"}` || string(change.After) != `{"initial":true,"name":"Earlier"}` {
+		t.Fatalf("back from a change: %+v, %v", change, err)
+	}
+	if _, _, err := change.Apply(context.Background(), home); err != nil || len(home.writes()) != 1 ||
+		home.writes()[0] != `input_boolean/update {"initial":true,"input_boolean_id":"guest_mode","name":"Earlier"}` {
+		t.Fatalf("writes = %v, %v", home.writes(), err)
+	}
+
+	home = newHelperHome()
+	change, err = revert(home, "input_boolean_delete", "input_boolean.movie_night", `{"name":"Movie night"}`, "")
+	if err != nil || len(change.Before) != 0 || string(change.After) != `{"name":"Movie night"}` {
+		t.Fatalf("back from a deletion: %+v, %v", change, err)
+	}
+	object, _, err := change.Apply(context.Background(), home)
+	if err != nil || object != "input_boolean.movie_night" || len(home.writes()) != 1 || home.writes()[0] != `input_boolean/create {"name":"Movie night"}` {
+		t.Fatalf("writes = %v, object %s, %v", home.writes(), object, err)
+	}
+
+	// Refused: an object that exists again, and a recorded state with a
+	// field this server does not write.
+	home = newHelperHome()
+	if _, err := revert(home, "input_boolean_delete", "input_boolean.party", `{"name":"Party"}`, ""); err == nil {
+		t.Error("a deletion is taken back although the object exists")
+	}
+	if _, err := revert(home, "input_boolean_update", "input_boolean.guests", `{"name":"x","labels":["airlock"]}`, `{}`); err == nil {
+		t.Error("a recorded state with an undeclared field is written back")
+	}
+	if len(home.writes()) != 0 {
+		t.Errorf("wrote %v", home.writes())
+	}
+}

@@ -59,8 +59,8 @@ func TestEveryToolIsFullyDeclared(t *testing.T) {
 		// has nothing else to run; every other tool has a handler, and
 		// states its action exactly when it is above R0.
 		changes := tool.Tier == catalog.R2
-		if (tool.Plan != nil) != changes || (tool.Kind != "") != changes || (tool.Handler == nil) != changes {
-			t.Errorf("tool %q (tier %s): a plan and a kind, and no handler, exactly for a tool of R2", tool.Name, tool.Tier)
+		if (tool.Plan != nil) != changes || (tool.Revert != nil) != changes || (tool.Kind != "") != changes || (tool.Handler == nil) != changes {
+			t.Errorf("tool %q (tier %s): a plan, a way back and a kind, and no handler, exactly for a tool of R2", tool.Name, tool.Tier)
 		}
 		if tool.Kind != "" && !slices.Contains(catalog.Kinds(), tool.Kind) {
 			t.Errorf("tool %q has kind %q, which is not a kind", tool.Name, tool.Kind)
