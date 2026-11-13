@@ -32,6 +32,27 @@ const (
 // Tiers returns every tier.
 func Tiers() []Tier { return []Tier{R0, R1, R2, R3, R4} }
 
+// Kind is a kind of configuration a tool of tier R2 changes. The policy
+// switches each kind on its own.
+type Kind string
+
+// The kinds of configuration.
+const (
+	KindHelper     Kind = "helper"
+	KindArea       Kind = "area"
+	KindLabel      Kind = "label"
+	KindEntity     Kind = "entity"
+	KindScene      Kind = "scene"
+	KindScript     Kind = "script"
+	KindAutomation Kind = "automation"
+	KindDashboard  Kind = "dashboard"
+)
+
+// Kinds returns every kind of configuration.
+func Kinds() []Kind {
+	return []Kind{KindHelper, KindArea, KindLabel, KindEntity, KindScene, KindScript, KindAutomation, KindDashboard}
+}
+
 // Core is the connection to Home Assistant Core a tool works with.
 type Core interface {
 	// Call sends one WebSocket command and decodes its result into out.

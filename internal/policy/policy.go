@@ -32,6 +32,33 @@ const (
 	Approval Decision = "approval"
 )
 
+// Release says which existing objects of a kind of configuration a tool
+// may change.
+type Release string
+
+const (
+	// ReleaseLabel releases the objects the owner marked: those carrying
+	// the control label, or, for dashboards, those the policy names.
+	ReleaseLabel Release = "label"
+	// ReleaseAll releases every object of the kind.
+	ReleaseAll Release = "all"
+)
+
+// Kind is what the policy says about one kind of configuration.
+type Kind struct {
+	// Change is Approval or Deny. Configuration is never changed without
+	// an approval.
+	Change Decision
+	// Release says which existing objects can be changed.
+	Release Release
+	// Objects are the released dashboards, by URL path. Empty for every
+	// other kind.
+	Objects []string
+}
+
+// dashboardShape is the shape of a dashboard's URL path.
+var dashboardShape = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+
 // defaultControlLabel is the Home Assistant label that releases an entity
 // for control when the policy file names none.
 const defaultControlLabel = "airlock"
@@ -59,6 +86,7 @@ const (
 // Policy maps each profile to its decision per tier and to its call limit.
 type Policy struct {
 	profiles map[string]map[catalog.Tier]Decision
+	kinds    map[string]map[catalog.Kind]Kind
 	limits   map[string]int
 	label    string
 }
@@ -69,7 +97,8 @@ func defaultLimits() map[string]int {
 
 // Default is the policy in force when the owner has written none: the local
 // profile may read and diagnose, and may control released entities after an
-// approval for each call. Nothing else is allowed. The remote profile is
+// approval for each call. Nothing else is allowed: no configuration is
+// changed until the owner's file says which kinds. The remote profile is
 // denied everything until its stricter redaction exists.
 func Default() Policy {
 	return Policy{
@@ -87,9 +116,19 @@ type file struct {
 	Version  int                          `json:"version"`
 	Profiles map[string]map[string]string `json:"profiles"`
 	Limits   map[string]limit             `json:"limits"`
+	// Configuration says, per profile and kind of configuration, whether
+	// and which objects of the kind can be changed.
+	Configuration map[string]map[string]kind `json:"configuration"`
 	// ControlLabel is the id of the Home Assistant label that releases an
 	// entity for control.
 	ControlLabel *string `json:"control_label"`
+}
+
+// kind is what the file may say about one kind of configuration.
+type kind struct {
+	Change  string   `json:"change"`
+	Release *string  `json:"release"`
+	Objects []string `json:"objects"`
 }
 
 // limit is what the file may say about one profile's quantity limits.
@@ -118,7 +157,10 @@ func Parse(data []byte) (Policy, error) {
 	for _, tier := range catalog.Tiers() {
 		known[tier] = true
 	}
-	p := Policy{profiles: map[string]map[catalog.Tier]Decision{}, limits: defaultLimits(), label: defaultControlLabel}
+	p := Policy{
+		profiles: map[string]map[catalog.Tier]Decision{}, kinds: map[string]map[catalog.Kind]Kind{},
+		limits: defaultLimits(), label: defaultControlLabel,
+	}
 	if f.ControlLabel != nil {
 		if !labelShape.MatchString(*f.ControlLabel) {
 			return Policy{}, errors.New("policy: control_label must be a label id of lower-case letters, digits and underscores")
@@ -149,9 +191,93 @@ func Parse(data []byte) (Policy, error) {
 			default:
 				return Policy{}, fmt.Errorf("policy: profile %q, tier %s: unknown decision %q", profile, tier, decision)
 			}
+			// Configuration is not changed without the owner seeing the
+			// difference; no file can say otherwise.
+			if catalog.Tier(tier) == catalog.R2 && Decision(decision) == Allow {
+				return Policy{}, fmt.Errorf("policy: profile %q: tier R2 cannot be allowed without approval; use %q or %q", profile, Approval, Deny)
+			}
+		}
+	}
+	for profile, kinds := range f.Configuration {
+		if profile != ProfileLocal && profile != ProfileRemote {
+			return Policy{}, fmt.Errorf("policy: configuration: unknown profile %q", profile)
+		}
+		p.kinds[profile] = map[catalog.Kind]Kind{}
+		for name, k := range kinds {
+			parsed, err := parseKind(catalog.Kind(name), k)
+			if err != nil {
+				return Policy{}, fmt.Errorf("policy: configuration: profile %q, kind %q: %w", profile, name, err)
+			}
+			p.kinds[profile][catalog.Kind(name)] = parsed
 		}
 	}
 	return p, nil
+}
+
+// parseKind checks what the file says about one kind of configuration.
+func parseKind(name catalog.Kind, k kind) (Kind, error) {
+	known := false
+	for _, other := range catalog.Kinds() {
+		known = known || other == name
+	}
+	if !known {
+		return Kind{}, errors.New("there is no such kind")
+	}
+	out := Kind{Release: ReleaseLabel}
+	switch Decision(k.Change) {
+	case Approval, Deny:
+		out.Change = Decision(k.Change)
+	default:
+		return Kind{}, fmt.Errorf("change must be %q or %q", Approval, Deny)
+	}
+	switch name {
+	case catalog.KindEntity:
+		// The objects of this kind are the entities themselves, and an
+		// entity is released by the control label only.
+		if k.Release != nil && Release(*k.Release) != ReleaseLabel {
+			return Kind{}, fmt.Errorf("release can only be %q: entities are released one by one", ReleaseLabel)
+		}
+	case catalog.KindLabel:
+		// A label carries no label. Every label but the control label is
+		// of this kind, and the file has nothing to choose.
+		if k.Release != nil {
+			return Kind{}, errors.New("release cannot be set: a label cannot carry a label")
+		}
+		out.Release = ReleaseAll
+	default:
+		if k.Release != nil {
+			switch Release(*k.Release) {
+			case ReleaseLabel, ReleaseAll:
+				out.Release = Release(*k.Release)
+			default:
+				return Kind{}, fmt.Errorf("release must be %q or %q", ReleaseLabel, ReleaseAll)
+			}
+		}
+	}
+	if len(k.Objects) > 0 {
+		if name != catalog.KindDashboard {
+			return Kind{}, errors.New("objects can only be named for dashboards; other kinds are released by the control label")
+		}
+		for _, object := range k.Objects {
+			if !dashboardShape.MatchString(object) {
+				return Kind{}, fmt.Errorf("objects: %q is not a dashboard's URL path", object)
+			}
+		}
+		out.Objects = append([]string{}, k.Objects...)
+	}
+	return out, nil
+}
+
+// Configuration returns what the policy says about a kind of configuration
+// for a profile. It is denied unless the profile's tier R2 asks for
+// approval and the kind does too.
+func (p Policy) Configuration(profile string, name catalog.Kind) Kind {
+	k, ok := p.kinds[profile][name]
+	if !ok || k.Change != Approval || p.Decide(profile, catalog.R2) != Approval {
+		return Kind{Change: Deny, Release: ReleaseLabel}
+	}
+	k.Objects = append([]string{}, k.Objects...)
+	return k
 }
 
 // Decide returns the decision for a profile and a tier. A profile or a tier
