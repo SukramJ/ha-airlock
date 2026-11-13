@@ -80,6 +80,10 @@ table: every call needs approval, and the tools cover `light`, `switch`
 and `input_boolean` only (ADR 0005). The policy file can set the table's
 value.
 
+For R2, ADR 0006 decides what "approval with diff" and the snapshot of
+section 5 mean, what of R2 no policy can enable, and that undo is given
+by an administrator in the sidebar page. None of it is built.
+
 A profile is assigned to a client when the owner approves it; the server
 does not derive it from where a request comes from. The two profile columns
 are starting values. Everything can be narrowed in
