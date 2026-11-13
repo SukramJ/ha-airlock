@@ -134,7 +134,17 @@ too. To change the numbers, add `limits` to `policy.json`:
 }
 ```
 
+## Clients this was tried with
+
+- **Claude Code** (2.1.323): `claude mcp add --transport http ha-airlock
+  https://<your address>/mcp`, then `claude mcp login ha-airlock` in a
+  terminal, or `/mcp` in a session started after the server was added.
+  It identifies itself with a metadata document, so nothing has to be
+  registered beforehand.
+
+No other client has been tried.
+
 ## Not there yet
 
-- A view of the audit log in the sidebar page.
-- Any tool that changes something.
+- Tools that change configuration, the system or files. What can be
+  switched today is in `docs/tools.md`.

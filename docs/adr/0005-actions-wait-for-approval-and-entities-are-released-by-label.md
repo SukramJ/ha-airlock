@@ -134,13 +134,29 @@ administrator's token over Core's WebSocket API:
 - `get_services` lists `turn_on` and `turn_off` for `light`, `switch` and
   `input_boolean`.
 
+Through ha-airlock, on the same instance and day, with Claude Code
+2.1.323 as the MCP client and the default policy:
+
+- `states_get` for the test helper returned its state inside the notice
+  wrapper.
+- `input_boolean_turn_on` for the helper returned the text beginning
+  `NOT RUN YET`; the helper stayed off, and the notification
+  `ha_airlock_approval` was present in Home Assistant.
+- A request the owner did not decide on within five minutes did not run;
+  the repeated call was parked again.
+- After the owner approved in the sidebar page, the same call returned
+  `"called":"input_boolean.turn_on"`, the notification was gone, and
+  `states_get` returned `on`.
+- Core's logbook names ha-airlock's own user as the one who called
+  `input_boolean.turn_on` (`context_user_id` of the entry, compared with
+  `config/auth/list`).
+
 ## Unverified
 
-- That MCP clients show the text of a parked call to the model in a way
-  that makes it repeat the call. No client has been connected yet.
-- The whole path on a running system: a call over MCP, the approval in
-  the sidebar page, the service called by ha-airlock's own user. The
-  measurements above were made beside ha-airlock, not through it.
+- That a model repeats a parked call of its own accord. The client showed
+  the text to the model, and the model reported that the call had not run
+  and had to be repeated; in the measurement it was told to call once, and
+  the repetition was a second instruction.
 - How Home Assistant derives a label's id from a name other than the one
   measured. The policy compares ids.
 - `light` and `switch` on a real device. Only the helper was switched.
