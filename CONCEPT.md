@@ -80,6 +80,10 @@ table: every call needs approval, and the tools cover `light`, `switch`
 and `input_boolean` only (ADR 0005). The policy file can set the table's
 value.
 
+For R2, ADR 0006 decides what "approval with diff" and the snapshot of
+section 5 mean, what of R2 no policy can enable, and that undo is given
+by an administrator in the sidebar page. None of it is built.
+
 A profile is assigned to a client when the owner approves it; the server
 does not derive it from where a request comes from. The two profile columns
 are starting values. Everything can be narrowed in
@@ -198,6 +202,10 @@ Assistant OS / Supervised).
   but not encrypted.
 - `tools_filesystem.py`, `tools_hacs.py` and `tools_code.py` exist; only the
   file names were read, not the code.
+- `homeassistant-addon/DOCS.md:366-380`: a web page switches single tools
+  and groups of tools on and off. `:313-336`: an option, off by default,
+  holds "high-stakes" tool calls until the user approves them in that
+  page, by per-tool rules. Only the documentation was read, not the code.
 
 **Measured — Home Assistant Core**, local checkout at `3f8160ce7ff`
 (2026-11-09), paths below `homeassistant/components/`:

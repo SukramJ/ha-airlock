@@ -86,6 +86,11 @@ All notable changes to ha-airlock are recorded here. The format follows
   twenty seconds.
 - The approval page shows, beside a waiting action, the state its entity
   is in at that moment.
+- ADR 0006: how configuration changes (tier R2) will work — a difference
+  rendered by the server, an approval bound to the state it was shown
+  against, a journal with undo in the sidebar page, a content check for
+  automations, scripts and scenes, and what no policy can enable. Nothing
+  of it is built yet.
 - ADR 0004 and ADR 0005 record the first run on a real system: Claude
   Code connected by its metadata document, read a state, and switched the
   test helper after the owner's approval. `docs/connecting-a-client.md`
