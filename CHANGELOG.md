@@ -84,6 +84,10 @@ All notable changes to ha-airlock are recorded here. The format follows
   in Home Assistant that says so and nothing more; it is dismissed when
   nothing waits. Expired requests are noticed and recorded within about
   twenty seconds.
+- ADR 0004 and ADR 0005 record the first run on a real system: Claude
+  Code connected by its metadata document, read a state, and switched the
+  test helper after the owner's approval. `docs/connecting-a-client.md`
+  says how Claude Code is connected.
 
 ### Fixed
 

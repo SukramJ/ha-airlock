@@ -125,13 +125,31 @@ authorization and persuades the owner to approve it. The Ingress UI
 therefore shows where the request came from and what it will be allowed,
 and a parked request is short-lived; it does not make the owner immune.
 
+## Measured
+
+On the owner's instance, 2026-11-13, with Claude Code 2.1.323 as the MCP
+client, behind the owner's HTTPS reverse proxy:
+
+- Claude Code registers by a Client ID Metadata Document. Its
+  authorization request carried the client id
+  `https://claude.ai/oauth/claude-code-client-metadata` and a redirect URI
+  `http://localhost:<port>/callback` with a port of its own choosing; the
+  document lists `http://localhost/callback` and
+  `http://127.0.0.1/callback`. The loopback rule of `MatchRedirect`
+  (`internal/oauth/clientmeta.go`) is what lets the two meet.
+- The sign-in was started with `claude mcp login`, the owner approved it
+  in the sidebar page, and the client then reported the server as
+  connected and listed all thirteen tools. The authorization endpoint that
+  waits for an approval given elsewhere was accepted by this client.
+- Without a token, a request to the MCP address through the proxy was
+  answered 401 with the `resource_metadata` pointer; a request to the port
+  under another host name was answered 421.
+
 ## Unverified
 
-- Which registration mechanism the MCP clients the owner uses support.
-  Client ID Metadata Documents are the specification's recommendation, not
-  a measured property of any client.
-- That those clients accept an authorization endpoint that waits for an
-  approval given in another tab.
+- Which registration mechanism MCP clients other than Claude Code support.
+- That clients other than Claude Code accept an authorization endpoint
+  that waits for an approval given in another tab.
 - OAuth 2.1 itself (`draft-ietf-oauth-v2-1-13`) was not read for this ADR;
   only the MCP pages that refer to it. It is read before the endpoints are
   written.
