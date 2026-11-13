@@ -96,7 +96,10 @@ changes**, newest first, each with what was there before and after.
   name or an area you had given the entity in Home Assistant is not
   restored.
 
-Undo works only if the helper is still as "After" shows it. If someone
+Undo works only if the helper is still as "After" shows it. "After" in
+this list is what Home Assistant held once the change was made, read
+back by ha-airlock; where Home Assistant fills in a default, it shows
+more than was asked for. If someone
 has changed it since, nothing is written and the page says so. Whether
 that is the case is checked when you press the button.
 

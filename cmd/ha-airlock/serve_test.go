@@ -723,6 +723,11 @@ func TestHelperIsChangedOnlyAfterApprovalAndIsJournalled(t *testing.T) {
 	r.home.CoreResults["config/entity_registry/get"] = `{"labels":["airlock"],"platform":"input_boolean","unique_id":"guest_mode","name":"Guests <here>","original_name":null}`
 	r.home.CoreResults["input_boolean/list"] = `[{"id":"guest_mode","name":"Guest mode","icon":"mdi:account"}]`
 	r.home.CoreResults["input_boolean/update"] = `null`
+	// After the write Home Assistant holds more than it was sent, as it
+	// does where a field has a default.
+	r.home.CoreThen = map[string]map[string]string{
+		"input_boolean/update": {"input_boolean/list": `[{"id":"guest_mode","name":"Visitors","initial":false}]`},
+	}
 	r.home.CoreResults["get_states"] = `[{"entity_id":"input_boolean.guests","state":"off"}]`
 	r.home.Mu.Unlock()
 	accessToken := r.authorize(t, "local")
@@ -770,7 +775,7 @@ func TestHelperIsChangedOnlyAfterApprovalAndIsJournalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the journal of changes: %v", err)
 	}
-	for _, want := range []string{`"object":"input_boolean.guests"`, `"before":{"icon":"mdi:account","name":"Guest mode"}`, `"after":{"name":"Visitors"}`} {
+	for _, want := range []string{`"object":"input_boolean.guests"`, `"before":{"icon":"mdi:account","name":"Guest mode"}`, `"after":{"name":"Visitors"}`, `"left":{"initial":false,"name":"Visitors"}`} {
 		if !strings.Contains(string(journal), want) {
 			t.Errorf("the journal lacks %s:\n%s", want, journal)
 		}
@@ -780,15 +785,13 @@ func TestHelperIsChangedOnlyAfterApprovalAndIsJournalled(t *testing.T) {
 	}
 
 	// The change is on the sidebar page, and an administrator takes it
-	// back there: Home Assistant, which now holds the new configuration,
-	// is sent the old one.
-	r.home.Mu.Lock()
-	r.home.CoreResults["input_boolean/list"] = `[{"id":"guest_mode","name":"Visitors"}]`
-	r.home.Mu.Unlock()
+	// back there: Home Assistant, which holds what the journal read back
+	// and not only what was asked for, is sent the old configuration.
 	shown = r.asAdmin(t, http.MethodGet, "/", nil).body
 	undoID := undoIDRE.FindStringSubmatch(shown)
 	token = formTokenRE.FindStringSubmatch(shown)
-	if undoID == nil || token == nil || !strings.Contains(shown, "<strong>Changed helper input_boolean.guests</strong>") {
+	if undoID == nil || token == nil || !strings.Contains(shown, "<strong>Changed helper input_boolean.guests</strong>") ||
+		!strings.Contains(shown, `<td>initial</td><td></td><td><code>false</code></td>`) {
 		t.Fatalf("the sidebar page does not list the change:\n%s", shown)
 	}
 	got := r.asAdmin(t, http.MethodPost, "/undo", url.Values{"csrf": {token[1]}, "id": {undoID[1]}})

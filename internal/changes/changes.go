@@ -56,6 +56,10 @@ type Change struct {
 	// object as the change leaves it; absent for a deletion.
 	Before json.RawMessage `json:"before,omitempty"`
 	After  json.RawMessage `json:"after,omitempty"`
+	// Left is the object as Home Assistant held it after the write, read
+	// back. It differs from After where Home Assistant fills in a default
+	// or stores a value in another form. Absent if it was not read.
+	Left json.RawMessage `json:"left,omitempty"`
 	// Released says that the object carried the control label when it was
 	// changed. An undo that creates it again gives the label back.
 	Released bool `json:"released,omitempty"`
@@ -64,6 +68,15 @@ type Change struct {
 	Failed string `json:"failed,omitempty"`
 	// Undone is set once an administrator took the change back.
 	Undone *Undo `json:"undone,omitempty"`
+}
+
+// Held returns the state the change left behind: the one read back from
+// Home Assistant if there is one, otherwise the one that was asked for.
+func (c *Change) Held() json.RawMessage {
+	if len(c.Left) != 0 {
+		return c.Left
+	}
+	return c.After
 }
 
 // Journal holds the changes and keeps them in one file. It is safe for
@@ -147,8 +160,9 @@ func (j *Journal) Get(id string) (Change, bool) {
 }
 
 // Settle notes how the write of a recorded change ended: the identifier of
-// the object, which a creation learns only then, or why it failed.
-func (j *Journal) Settle(ctx context.Context, id, object, failed string) error {
+// the object, which a creation learns only then, the state read back after
+// it, or why it failed.
+func (j *Journal) Settle(ctx context.Context, id, object, failed string, left json.RawMessage) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("changes: settle: %w", err)
 	}
@@ -163,6 +177,9 @@ func (j *Journal) Settle(ctx context.Context, id, object, failed string) error {
 			next[i].Object = object
 		}
 		next[i].Failed = failed
+		if len(left) != 0 {
+			next[i].Left = append(json.RawMessage(nil), left...)
+		}
 		if err := j.save(next); err != nil {
 			return err
 		}
@@ -234,7 +251,7 @@ func (j *Journal) save(changes []Change) error {
 
 func clone(c *Change) Change {
 	out := *c
-	out.Before, out.After = bytes.Clone(c.Before), bytes.Clone(c.After)
+	out.Before, out.After, out.Left = bytes.Clone(c.Before), bytes.Clone(c.After), bytes.Clone(c.Left)
 	if c.Undone != nil {
 		undone := *c.Undone
 		out.Undone = &undone

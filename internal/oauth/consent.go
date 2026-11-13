@@ -191,7 +191,7 @@ func (c *Consent) render(w http.ResponseWriter, r *http.Request, message string)
 		m := &made[i]
 		v := madeView{
 			ID: m.ID, When: m.Time.Format("2006-01-02 15:04"), Client: names[m.Client], ClientHost: hostOf(m.Client), Tool: m.Tool,
-			Failed: m.Failed, Change: viewOf(&approval.Difference{Kind: m.Kind, Object: m.Object, Before: m.Before, After: m.After}),
+			Failed: m.Failed, Change: viewOf(&approval.Difference{Kind: m.Kind, Object: m.Object, Before: m.Before, After: m.Held()}),
 		}
 		if m.Undone != nil {
 			v.Undone = m.Undone.Time.Format("2006-01-02 15:04")

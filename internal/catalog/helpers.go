@@ -368,7 +368,7 @@ func (d helperDomain) planUpdate(ctx context.Context, core Core, entity string, 
 	}
 	return Change{
 		Summary: fmt.Sprintf("Change the %s %s", d.noun, entity),
-		Object:  entity, Name: name, Entity: entity, Before: before, After: after,
+		Object:  entity, Name: name, Entity: entity, Before: before, After: after, Left: d.left,
 		Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
 			message := map[string]json.RawMessage{}
 			for key, value := range state {
@@ -385,6 +385,20 @@ func (d helperDomain) planUpdate(ctx context.Context, core Core, entity string, 
 			return entity, json.RawMessage(fmt.Sprintf(`{"changed":%q}`, entity)), nil
 		},
 	}, nil
+}
+
+// left reads the stored configuration of the helper an entity stands for,
+// as a change's state after the write.
+func (d helperDomain) left(ctx context.Context, core Core, entity string) (json.RawMessage, error) {
+	item, _, err := d.find(ctx, core, entity)
+	if err != nil {
+		return nil, err
+	}
+	held, err := json.Marshal(item.fields)
+	if err != nil {
+		return nil, fmt.Errorf("encode the state after the change: %w", err)
+	}
+	return held, nil
 }
 
 // planDelete plans deleting the helper an entity stands for.
@@ -417,7 +431,7 @@ func (d helperDomain) planCreate(state map[string]json.RawMessage) (Change, erro
 	}
 	return Change{
 		Summary: "Create a " + d.noun,
-		After:   after,
+		After:   after, Left: d.left,
 		Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
 			var created struct {
 				ID string `json:"id"`

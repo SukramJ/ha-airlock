@@ -229,19 +229,25 @@ func TestSettleNotesTheObjectOrTheFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := j.Settle(context.Background(), created.ID, "input_boolean.new", ""); err != nil {
+	if err := j.Settle(context.Background(), created.ID, "input_boolean.new", "", json.RawMessage(`{"name":"New","step":1}`)); err != nil {
 		t.Fatalf("settle: %v", err)
 	}
-	if err := j.Settle(context.Background(), failed.ID, "", "home assistant refused"); err != nil {
+	if err := j.Settle(context.Background(), failed.ID, "", "home assistant refused", nil); err != nil {
 		t.Fatalf("settle: %v", err)
 	}
-	if err := j.Settle(context.Background(), "no-such-id", "x", ""); !errors.Is(err, changes.ErrUnknown) {
+	if err := j.Settle(context.Background(), "no-such-id", "x", "", nil); !errors.Is(err, changes.ErrUnknown) {
 		t.Fatalf("unknown id: %v", err)
 	}
 
 	reopened := open(t, path)
 	if got, _ := reopened.Get(created.ID); got.Object != "input_boolean.new" || got.Failed != "" {
 		t.Fatalf("creation after settling: %+v", got)
+	}
+	if got, _ := reopened.Get(created.ID); string(got.Left) != `{"name":"New","step":1}` || string(got.Held()) != string(got.Left) {
+		t.Fatalf("state read back after the creation: %+v", got)
+	}
+	if got, _ := reopened.Get(failed.ID); got.Left != nil || string(got.Held()) != string(got.After) {
+		t.Fatalf("state of the failed change: %+v", got)
 	}
 	if got, _ := reopened.Get(failed.ID); got.Object != "input_boolean.guest" || got.Failed != "home assistant refused" {
 		t.Fatalf("failed change after settling: %+v", got)

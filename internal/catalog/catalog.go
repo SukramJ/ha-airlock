@@ -115,6 +115,11 @@ type Change struct {
 	// Apply makes exactly this change. For a creation it returns the
 	// entity that now stands for the new object.
 	Apply func(ctx context.Context, core Core) (object string, result json.RawMessage, err error)
+	// Left reads the object as Home Assistant holds it once Apply has
+	// run. Home Assistant may fill in defaults or store a value in another
+	// form than it was given, and an undo compares against what is held.
+	// Nil for a deletion, which leaves nothing.
+	Left func(ctx context.Context, core Core, object string) (json.RawMessage, error)
 }
 
 // All returns the catalogue. The slice is new on every call; the catalogue

@@ -115,7 +115,17 @@ not happen. The audit record of the call carries the hashes of both
 states, not the states. The sidebar page lists the changes, newest first,
 each with **Undo**. An undo writes the state before back, through the
 gate: the tool that made the change plans the way back, the gate reads
-the object, and writes only if it still equals the state after. That is
+the object, and writes only if it still equals the state after. The
+state after is the one the gate read back from Home Assistant once the
+write was made, not the one that was asked for: Home Assistant replaces a
+helper's stored configuration by the validated one, which carries the
+schema's defaults and coerced values
+(`homeassistant/components/input_number/__init__.py:103-118` and
+`:226-229`, `components/timer/__init__.py:157-163`, Core 3f8160ce7ff), so
+the two differ for every helper domain whose schema has a default. The
+journal keeps both. If the state cannot be read back, the change stands,
+the audit record says so, and the undo compares against the state asked
+for. That is
 checked when the undo is asked for, not when the page is drawn; if the
 object has changed since, nothing is written and the page says so. The
 undo asks neither the policy nor for an approval, and works while the
@@ -408,6 +418,9 @@ Not measured:
 - That the check's reading of an action is the reading Core makes, for
   every action type. The check is to be written against Core's schemas
   and tested per type; until then this is an intention.
-- Update semantics of the helper domains other than `input_boolean`.
+- That the state read back differs from the state asked for on a running
+  system. It is read from the schemas of the other helper domains;
+  `input_boolean` has no default, so the measurements above could not
+  show it.
 - The size of real configurations and of their differences on the
   owner's instance.

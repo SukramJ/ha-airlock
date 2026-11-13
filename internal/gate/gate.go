@@ -71,7 +71,7 @@ type Approvals interface {
 // Journal is the journal of configuration changes, as the gate uses it.
 type Journal interface {
 	Record(ctx context.Context, change changes.Change) (changes.Change, error)
-	Settle(ctx context.Context, id, object, failed string) error
+	Settle(ctx context.Context, id, object, failed string, left json.RawMessage) error
 	Get(id string) (changes.Change, bool)
 	MarkUndone(ctx context.Context, id, by string) error
 }
@@ -391,7 +391,7 @@ func (g *Gate) write(ctx, runCtx context.Context, principal *Principal, tool *ca
 	object, result, err := plan.Apply(runCtx, g.core)
 	if err != nil {
 		message, _ := redact.String(err.Error())
-		_ = g.journal.Settle(context.WithoutCancel(ctx), recorded.ID, "", message)
+		_ = g.journal.Settle(context.WithoutCancel(ctx), recorded.ID, "", message, nil)
 		entry.Result = "error: " + message
 		return Outcome{Allowed: true, Message: message}
 	}
@@ -401,7 +401,16 @@ func (g *Gate) write(ctx, runCtx context.Context, principal *Principal, tool *ca
 			labelled = "; the control label could not be set on the new object"
 		}
 	}
-	if err := g.journal.Settle(context.WithoutCancel(ctx), recorded.ID, object, ""); err != nil {
+	// What Home Assistant now holds is what an undo compares against. If
+	// it cannot be read, the journal keeps the state that was asked for.
+	var left json.RawMessage
+	if plan.Left != nil {
+		if left, err = plan.Left(runCtx, g.core, object); err != nil {
+			left = nil
+			labelled += "; the state after the change could not be read back"
+		}
+	}
+	if err := g.journal.Settle(context.WithoutCancel(ctx), recorded.ID, object, "", left); err != nil {
 		labelled += "; the journal could not note the object"
 	}
 	outcome := finish(result, entry)
@@ -441,7 +450,7 @@ func (g *Gate) Undo(ctx context.Context, id, by string) error {
 		}
 		return err
 	}
-	plan, err := tool.Revert(runCtx, g.core, change.Object, change.Before, change.After)
+	plan, err := tool.Revert(runCtx, g.core, change.Object, change.Before, change.Held())
 	if err != nil {
 		message, _ := redact.String(err.Error())
 		return fail("not undone: "+message, fmt.Errorf("%w: %s", ErrChangedSince, message))
@@ -450,7 +459,7 @@ func (g *Gate) Undo(ctx context.Context, id, by string) error {
 	if err != nil {
 		return fail("not undone: the present state could not be read", ErrChangedSince)
 	}
-	left, err := changes.Hash(change.After)
+	left, err := changes.Hash(change.Held())
 	if err != nil || present != left || plan.Apply == nil {
 		return fail("not undone: change "+change.ID+": the object has changed since", ErrChangedSince)
 	}
