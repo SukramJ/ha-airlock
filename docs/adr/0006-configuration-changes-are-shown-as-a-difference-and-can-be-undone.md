@@ -369,6 +369,13 @@ client:
 - After its approval `input_boolean_delete` removed the stored item and the
   registry entry.
 - `input_boolean_list` returned the helpers with their entities.
+- Through 0.7.1-dev: a helper "ha-airlock undo test" was created after an
+  approval and was in `input_boolean/list` and in the registry with the
+  label. The owner then pressed **Undo** on that change in the sidebar
+  page. Afterwards `input_boolean/list` no longer held the item, the
+  registry answered `not_found` for the entity and the state was gone
+  (HTTP 404). The owner's other helpers were unchanged.
+- The owner reported the table of a change request as readable.
 
 Read beside ha-airlock with an administrator's token: the registry and
 `input_boolean/list` after each step.
@@ -377,11 +384,12 @@ Read beside ha-airlock with an administrator's token: the registry and
 
 Not measured:
 
-- The sidebar page as the owner saw it. Each change was approved there,
-  so the request was shown; whether the table read as intended was not
-  reported.
+- The list of changes in the sidebar page as the owner saw it, and the
+  audit record `change_undone` of the undo above; neither was read back.
 - The journal file on the instance; it is in the App's private data.
-- Undo on a running system.
+- Undo of an update and of a deletion on a running system, and an undo
+  refused because the object was altered in between. Only the undo of a
+  creation was measured.
 - A change against an object that was altered after the approval, and a
   failed write, on a running system.
 
