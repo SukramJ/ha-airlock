@@ -1,8 +1,8 @@
 # ADR 0006 — A configuration change is shown as a difference, bound to the state it was shown against, and can be undone
 
-Status: proposed, 2026-11-13. The owner decided five points, named at the
-end of *Context*; everything else is the assistant's proposal and waits
-for the owner's reading. Nothing of it is built. Every part is to be measured on a running Home Assistant before the next
+Status: accepted, 2026-11-13. The owner decided five points, named at the
+end of *Context*, and accepted the rest as proposed by the assistant.
+Nothing of it is built. Every part is to be measured on a running Home Assistant before the next
 part is built on it; a measurement that contradicts this record amends it.
 
 ## Context
