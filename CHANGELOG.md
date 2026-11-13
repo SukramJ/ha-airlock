@@ -86,6 +86,9 @@ All notable changes to ha-airlock are recorded here. The format follows
   twenty seconds.
 - The approval page shows, beside a waiting action, the state its entity
   is in at that moment.
+- ADR 0006 records the first configuration changes on a real system: a
+  toggle helper created, changed and deleted through ha-airlock, each
+  after the owner's approval.
 - The first tools that change configuration (tier R2): `input_boolean_create`,
   `input_boolean_update` and `input_boolean_delete`, and the read-only
   `input_boolean_list`. They are off until the policy file opens the kind
