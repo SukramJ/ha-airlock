@@ -72,7 +72,11 @@ denial and expiry are records with the administrator's user id. An
 approval that cannot be recorded is not given.
 
 **Requests live in memory.** A restart forgets what waits and what was
-approved and not yet run.
+approved and not yet run. They are not written to disk, and that is meant:
+a request waits five minutes and an approval is good for two, so what a
+restart costs is one more call and one more approval, while a stored
+approval would be one more file whose content decides whether something
+runs. The start takes away the notification an earlier run left.
 
 ## Consequences
 
@@ -150,13 +154,20 @@ Through ha-airlock, on the same instance and day, with Claude Code
 - Core's logbook names ha-airlock's own user as the one who called
   `input_boolean.turn_on` (`context_user_id` of the entry, compared with
   `config/auth/list`).
+- A model repeats a parked call of its own accord. A fresh agent in
+  Claude Code was given only the goal — switch the helper off with
+  ha-airlock's tools — and nothing about approvals. After `NOT RUN YET` it
+  called the tool again with the same arguments five times in about three
+  minutes, by its own account of the intervals, then stopped and reported
+  that the helper was still on and what the owner had to do. The owner did
+  not approve during that run, so the helper stayed on.
 
 ## Unverified
 
-- That a model repeats a parked call of its own accord. The client showed
-  the text to the model, and the model reported that the call had not run
-  and had to be repeated; in the measurement it was told to call once, and
-  the repetition was a second instruction.
+- That a repetition a model makes of its own accord meets an approval and
+  runs. Repetition without an approval was measured, and a run after an
+  approval with the repetition instructed; the two together were not.
+- Other models and other clients. One model in one client was measured.
 - How Home Assistant derives a label's id from a name other than the one
   measured. The policy compares ids.
 - `light` and `switch` on a real device. Only the helper was switched.
