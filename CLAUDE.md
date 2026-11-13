@@ -331,8 +331,11 @@ the table above, or *which* guard gets built.
   stop is a successful outcome); a report format of ≤ 250 words.
 - **A report is a claim.** Read the diff, run the gate yourself.
 
-No agent definitions exist under `.claude/agents/` yet; port openccu-loom's
-(`impl`, `guard`, `sweep`, `hunt`) with the first implementation slice.
+The agent definitions are under `.claude/agents/`: `impl` (Opus,
+implementation of a finished plan), `guard` (Opus, tests from a guard
+specification, with bite proof), `sweep` (Haiku, read-only inventories)
+and `hunt` (Fable, read-only defect hunt). Their stop conditions are the
+security paths of the table above.
 
 ## Token use
 
