@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
@@ -69,7 +70,7 @@ func newWeb(t *testing.T) *web {
 	w.server.Register(publicMux)
 
 	w.halt = &fakeSwitch{}
-	w.actions = approval.New(w.auditLog, nil)
+	w.actions = approval.New(w.auditLog, nil, time.Now)
 	consent, err := oauth.NewConsent(w.store, w.halt, w.auditLog, w.actions, logger)
 	if err != nil {
 		t.Fatalf("consent: %v", err)

@@ -118,10 +118,10 @@ type Store struct {
 	announced  bool
 }
 
-// New returns an empty store that records decisions in the audit log.
-// notify may be nil.
-func New(log Appender, notify Notify) *Store {
-	return &Store{audit: log, notify: notify, items: map[string]*item{}, now: time.Now}
+// New returns an empty store that records decisions in the audit log and
+// reads the time from now. notify may be nil.
+func New(log Appender, notify Notify, now func() time.Time) *Store {
+	return &Store{audit: log, notify: notify, items: map[string]*item{}, now: now}
 }
 
 // announce tells notify whether something waits, if that changed. It is

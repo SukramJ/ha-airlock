@@ -19,13 +19,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/SukramJ/ha-airlock/internal/approval"
 	"github.com/SukramJ/ha-airlock/internal/audit"
 	"github.com/SukramJ/ha-airlock/internal/oauth"
 	"github.com/SukramJ/ha-airlock/internal/provision/provisiontest"
@@ -81,6 +84,13 @@ type running struct {
 // and returns once its listeners are up.
 func startServer(t *testing.T, optionsJSON string, peers ...netip.Addr) *running {
 	t.Helper()
+	return startServerIn(t, optionsJSON, nil, peers...)
+}
+
+// startServerIn is startServer with a change to the environment the server
+// is started in.
+func startServerIn(t *testing.T, optionsJSON string, change func(*environment), peers ...netip.Addr) *running {
+	t.Helper()
 	home := provisiontest.NewHome(t)
 	home.CoreResults = map[string]string{"system_log/list": `[{"name":"homeassistant.components.mqtt","level":"ERROR",
 		"message":["cannot connect to mqtt://user:` + credentialInLog + `@broker:1883"],"count":2}]`}
@@ -104,6 +114,11 @@ func startServer(t *testing.T, optionsJSON string, peers ...netip.Addr) *running
 		supervisorPeers: func(context.Context) ([]netip.Addr, error) { return peers, nil },
 		clientMetadata:  oneClient{},
 		onListening:     func(addrs map[string]net.Addr) { listening <- addrs },
+		now:             time.Now,
+		sweepEvery:      sweepEvery,
+	}
+	if change != nil {
+		change(&env)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
@@ -643,6 +658,46 @@ func TestEntityWithoutTheOwnersLabelIsNotControlled(t *testing.T) {
 	}
 	if !strings.Contains(r.auditText(t), `"decision":"not_released"`) {
 		t.Fatal("the refusal is not recorded")
+	}
+}
+
+// A request nobody decides on expires on the server as main builds it,
+// without a further call from anyone: the expiry is recorded and the notice
+// in Home Assistant is taken away.
+func TestWaitingActionExpiresOnTheRunningServerWithoutAFurtherCall(t *testing.T) {
+	t.Parallel()
+	var ahead atomic.Int64 // nanoseconds the server's clock is ahead
+	r := startServerIn(t, `{"public_url":"`+publicURL+`"}`, func(env *environment) {
+		env.now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) }
+		env.sweepEvery = 10 * time.Millisecond
+	})
+	r.home.Mu.Lock()
+	r.home.CoreResults["config/entity_registry/get"] = `{"labels":["airlock"],"name":"Desk","original_name":null}`
+	r.home.Mu.Unlock()
+	accessToken := r.authorize(t, "local")
+	dismissed := func() bool {
+		r.home.Mu.Lock()
+		defer r.home.Mu.Unlock()
+		return slices.Contains(r.home.Services, "persistent_notification.dismiss")
+	}
+
+	if text, _ := r.callToolWith(t, accessToken, "light_turn_on", map[string]string{"entity_id": "light.desk"}); !strings.HasPrefix(text, "NOT RUN YET") {
+		t.Fatalf("the call was not parked: %s", text)
+	}
+	// Several sweeps pass while the request is still within its time.
+	time.Sleep(100 * time.Millisecond)
+	if dismissed() || strings.Contains(r.auditText(t), "action_expired") {
+		t.Fatal("the request expired before its time")
+	}
+
+	ahead.Store(int64(approval.WaitFor + time.Second))
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !dismissed() || !strings.Contains(r.auditText(t), `"event":"action_expired"`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the expiry was not noticed: notice dismissed = %t, audit log:\n%s", dismissed(), r.auditText(t))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

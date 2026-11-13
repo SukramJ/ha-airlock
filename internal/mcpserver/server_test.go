@@ -101,7 +101,7 @@ func newFixture(t *testing.T) fixture {
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	core := &fakeCore{}
-	approvals := approval.New(log, nil)
+	approvals := approval.New(log, nil, time.Now)
 	g := gate.New(gate.Config{
 		Policy: policy.Default(), Audit: log, Core: core, Tools: catalog.All(), Timeout: 5 * time.Second, Approvals: approvals,
 	})

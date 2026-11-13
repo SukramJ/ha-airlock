@@ -205,7 +205,7 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 		return nil, err
 	}
 	core := provision.NewCore(coreURL, cred)
-	approvals := approval.New(auditLog, approvalNotice(core, logger))
+	approvals := approval.New(auditLog, approvalNotice(core, logger), env.now)
 	a.sweep = approvals.Sweep
 	consent, err := oauth.NewConsent(store, killSwitch, auditLog, approvals, logger)
 	if err != nil {
@@ -289,7 +289,7 @@ func (a *app) serve(ctx context.Context, env environment) error {
 	}
 	// The sweeper ends with ctx.
 	wg.Go(func() {
-		ticker := time.NewTicker(sweepEvery)
+		ticker := time.NewTicker(env.sweepEvery)
 		defer ticker.Stop()
 		for {
 			select {

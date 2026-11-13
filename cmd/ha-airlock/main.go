@@ -55,6 +55,10 @@ type environment struct {
 	// onListening, if set, is told the bound addresses once the listeners
 	// are up.
 	onListening func(map[string]net.Addr)
+	// now is the clock by which approvals expire; sweepEvery is how often
+	// the server looks for expired ones.
+	now        func() time.Time
+	sweepEvery time.Duration
 }
 
 const (
@@ -76,6 +80,8 @@ func main() {
 			return lookupSupervisor(ctx, "supervisor")
 		},
 		clientMetadata: oauth.NewFetcher(),
+		now:            time.Now,
+		sweepEvery:     sweepEvery,
 	}
 	code := run(ctx, os.Args[1:], env, os.Stdout)
 	stop()
