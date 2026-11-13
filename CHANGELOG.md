@@ -124,6 +124,12 @@ All notable changes to ha-airlock are recorded here. The format follows
 
 ### Changed
 
+- **The policy file moved.** ha-airlock reads `policy.json` from the App's
+  own configuration folder, which the owner can reach with a file editor
+  and which is in backups, instead of the App's private data directory,
+  which the owner cannot reach. The folder is mounted read-only. A
+  `policy.json` left in the data directory stops the server from starting,
+  with a message that says so.
 - The minimum Go version is 1.27.4, which fixes GO-2026-6859 in `net/http`.
 - New dependency: `github.com/gorilla/websocket` v1.5.3 (BSD-2-Clause, no
   dependencies of its own), for Core's WebSocket API. The first module

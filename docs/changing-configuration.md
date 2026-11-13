@@ -10,7 +10,8 @@ This is off until you switch it on.
 
 ## Switch it on
 
-In `/data/policy.json`, the `local` profile needs tier `R2` set to
+In `policy.json` (where the file lives is in
+`docs/connecting-a-client.md`), the `local` profile needs tier `R2` set to
 `approval`, and the kind `helper` opened:
 
 ```json

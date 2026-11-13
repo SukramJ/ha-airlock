@@ -138,16 +138,25 @@ func publicHost(publicURL string) (string, error) {
 	return u.Host, nil
 }
 
-// loadPolicy reads the owner's policy, or returns the default one.
-func loadPolicy(path string) (policy.Policy, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // a fixed file in the App's data directory
+// loadPolicy reads the owner's policy from the App's configuration folder,
+// or returns the default one; written reports which. Earlier versions read
+// the file from the data directory, where the owner cannot reach it. A
+// file left there is not read and not ignored either: it may hold a
+// stricter rule than the default, so the server does not start with it.
+func loadPolicy(configDir, dataDir string) (pol policy.Policy, written bool, err error) {
+	if _, err := os.Stat(filepath.Join(dataDir, "policy.json")); err == nil {
+		return policy.Policy{}, false, errors.New("policy: policy.json in the data directory is no longer read; " +
+			"move it to the App's configuration folder, or remove it")
+	}
+	data, err := os.ReadFile(filepath.Join(configDir, "policy.json")) //nolint:gosec // a fixed file in the App's configuration folder
 	if errors.Is(err, os.ErrNotExist) {
-		return policy.Default(), nil
+		return policy.Default(), false, nil
 	}
 	if err != nil {
-		return policy.Policy{}, fmt.Errorf("read policy: %w", err)
+		return policy.Policy{}, false, fmt.Errorf("read policy: %w", err)
 	}
-	return policy.Parse(data)
+	pol, err = policy.Parse(data)
+	return pol, err == nil, err
 }
 
 // runServe is the server: it makes sure ha-airlock has its Home Assistant
@@ -217,10 +226,11 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	}
 	logger.InfoContext(ctx, "home assistant user is ready", slog.String("user_id", cred.UserID), slog.Bool("created", created))
 
-	pol, err := loadPolicy(filepath.Join(env.dataDir, "policy.json"))
+	pol, written, err := loadPolicy(env.configDir, env.dataDir)
 	if err != nil {
 		return nil, err
 	}
+	logger.InfoContext(ctx, "policy is in force", slog.Bool("from_file", written))
 	store, err := oauth.Open(filepath.Join(env.dataDir, "grants.json"), auditLog)
 	if err != nil {
 		return nil, err
