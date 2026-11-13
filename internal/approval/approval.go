@@ -68,6 +68,27 @@ type Entity struct {
 	Name string
 }
 
+// Difference is what a configuration change would replace, as the owner is
+// shown it. The state before is read from Home Assistant by the server; the
+// state after is what the call would leave.
+type Difference struct {
+	// Kind is the kind of configuration, Object the identifier of what is
+	// changed; Object is empty for a creation.
+	Kind   string
+	Object string
+	// Name is the name Home Assistant has for the object now.
+	Name string
+	// Before is absent for a creation, After for a deletion.
+	Before json.RawMessage
+	After  json.RawMessage
+	// Note is a remark of the server on what the change brings with it.
+	Note string
+}
+
+// MaxDifferenceBytes bounds the two states of a difference together. A
+// larger change is refused, not cut: the owner approves what is shown.
+const MaxDifferenceBytes = 64 << 10
+
 // Request is one call as the owner is shown it. Every field comes from the
 // server: the summary from the tool's declaration, the names from Home
 // Assistant, the arguments after redaction.
@@ -81,6 +102,8 @@ type Request struct {
 	Summary   string
 	Arguments json.RawMessage
 	Entities  []Entity
+	// Change is set for a call that changes configuration.
+	Change    *Difference
 	CreatedAt time.Time
 	// Expires is when the request stops waiting.
 	Expires time.Time
@@ -160,6 +183,18 @@ func (s *Store) Sweep(ctx context.Context) {
 // whatever the order of their object keys or their spacing; any other
 // difference gives another key.
 func Key(client, tool string, args json.RawMessage) (string, error) {
+	return key(client, tool, args)
+}
+
+// KeyBoundTo is Key for a call that replaces something: the approval is
+// bound, beyond client, tool and arguments, to the state the owner was
+// shown as the present one. state identifies that state; a call against
+// another state has another key.
+func KeyBoundTo(client, tool string, args json.RawMessage, state string) (string, error) {
+	return key(client, tool, args, []byte("state"), []byte(state))
+}
+
+func key(client, tool string, args json.RawMessage, more ...[]byte) (string, error) {
 	canonical := []byte("null")
 	if len(bytes.TrimSpace(args)) > 0 {
 		dec := json.NewDecoder(bytes.NewReader(args))
@@ -179,7 +214,7 @@ func Key(client, tool string, args json.RawMessage) (string, error) {
 		}
 	}
 	h := sha256.New()
-	for _, part := range [][]byte{[]byte(client), []byte(tool), canonical} {
+	for _, part := range append([][]byte{[]byte(client), []byte(tool), canonical}, more...) {
 		// Each part is preceded by its length, so that no two different
 		// triples give the same bytes.
 		h.Write([]byte(strconv.Itoa(len(part)) + ":"))
@@ -219,12 +254,26 @@ func (s *Store) Resolve(ctx context.Context, req *Request) (status Status, appro
 	if _, err := rand.Read(id); err != nil {
 		return Waiting, "", fmt.Errorf("approval: %w", err)
 	}
-	parked := *req
+	parked := detached(req)
 	parked.ID = hex.EncodeToString(id)
 	parked.CreatedAt = now
 	parked.Expires = now.Add(WaitFor)
 	s.items[req.Key] = &item{Request: parked, status: Waiting, expires: parked.Expires}
 	return Waiting, "", nil
+}
+
+// detached returns a copy of the request that shares nothing with it, so
+// that what the owner is shown cannot be changed after it was parked.
+func detached(req *Request) Request {
+	out := *req
+	out.Arguments = bytes.Clone(req.Arguments)
+	out.Entities = append([]Entity(nil), req.Entities...)
+	if req.Change != nil {
+		change := *req.Change
+		change.Before, change.After = bytes.Clone(change.Before), bytes.Clone(change.After)
+		out.Change = &change
+	}
+	return out
 }
 
 // Pending returns the requests that wait for a decision, oldest first.
@@ -235,7 +284,7 @@ func (s *Store) Pending() []Request {
 	var out []Request
 	for _, it := range s.items {
 		if it.status == Waiting && now.Before(it.expires) {
-			out = append(out, it.Request)
+			out = append(out, detached(&it.Request))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

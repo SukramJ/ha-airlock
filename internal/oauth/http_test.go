@@ -709,6 +709,74 @@ func TestWaitingActionShowsTheEntitysPresentState(t *testing.T) {
 	}
 }
 
+// parkChange puts a configuration change before the administrator.
+func (w *web) parkChange(t *testing.T, key string, change approval.Difference) {
+	t.Helper()
+	req := &approval.Request{
+		Key: key, Client: clientID, Tool: "input_boolean_update", Summary: "Change helper input_boolean.guest",
+		Arguments: json.RawMessage(`{}`), Change: &change,
+	}
+	if status, _, err := w.actions.Resolve(context.Background(), req); err != nil || status != approval.Waiting {
+		t.Fatalf("park: status %d, %v", status, err)
+	}
+}
+
+// A configuration change is shown field by field: what Home Assistant
+// holds now, what the application asks for, and which fields differ. Every
+// value is text, whatever it contains.
+func TestWaitingChangeIsShownFieldByField(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	w.tokens(t, policy.ProfileLocal)
+	w.parkChange(t, "update", approval.Difference{
+		Kind: "helper", Object: "input_boolean.guest", Name: "Guests <i>",
+		Before: json.RawMessage(`{"name":"Guests","icon":"mdi:account","initial":false}`),
+		After:  json.RawMessage(`{"initial": false, "name":"<b>Visitors</b>"}`),
+		Note:   "A note of the server.",
+	})
+
+	_, body := w.asAdmin(t, http.MethodGet, "/", nil)
+	for _, want := range []string{
+		"<dt>Changes</dt><dd>helper input_boolean.guest — Guests &lt;i&gt;</dd>",
+		"<th>Field</th><th>Now</th><th>After</th>",
+		`<tr class="changed"><td>icon</td><td><code>&#34;mdi:account&#34;</code></td><td></td></tr>`,
+		`<tr><td>initial</td><td><code>false</code></td><td><code>false</code></td></tr>`,
+		`<tr class="changed"><td>name</td><td><code>&#34;Guests&#34;</code></td><td><code>&#34;&lt;b&gt;Visitors&lt;/b&gt;&#34;</code></td></tr>`,
+		"was read from Home Assistant by ha-airlock", "A note of the server.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "<b>Visitors") || strings.Contains(body, "<i>") {
+		t.Fatalf("a value of the change is shown as markup:\n%s", body)
+	}
+}
+
+func TestCreationAndDeletionAreShownAsSuch(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+	w.tokens(t, policy.ProfileLocal)
+	w.parkChange(t, "create", approval.Difference{Kind: "helper", After: json.RawMessage(`{"name":"Guests"}`)})
+	w.parkChange(t, "delete", approval.Difference{Kind: "helper", Object: "input_boolean.old", Before: json.RawMessage(`{"name":"Old"}`)})
+	w.parkChange(t, "odd", approval.Difference{Kind: "dashboard", Object: "test", Before: json.RawMessage(`[1]`), After: json.RawMessage(`[2]`)})
+
+	_, body := w.asAdmin(t, http.MethodGet, "/", nil)
+	for _, want := range []string{
+		"<dt>Creates</dt><dd>helper</dd>", "<th>Field</th><th>—</th><th>After</th>",
+		`<tr class="changed"><td>name</td><td></td><td><code>&#34;Guests&#34;</code></td></tr>`,
+		"This object is new: every value in the table was chosen by the application.",
+		"<dt>Deletes</dt><dd>helper input_boolean.old</dd>", "<th>Field</th><th>Now</th><th>—</th>",
+		`<tr class="changed"><td>name</td><td><code>&#34;Old&#34;</code></td><td></td></tr>`,
+		// A state that is not an object is one row.
+		`<tr class="changed"><td>value</td><td><code>[1]</code></td><td><code>[2]</code></td></tr>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page lacks %q", want)
+		}
+	}
+}
+
 func TestActionIsDeniedOnThePage(t *testing.T) {
 	t.Parallel()
 	w := newWeb(t)
