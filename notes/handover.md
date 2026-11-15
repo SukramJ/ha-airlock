@@ -15,15 +15,8 @@ and the entity registry.
 
 **Open, and where each goes.**
 
-1. A measurement is half done: `input_number.ha_airlock_number_test` was
-   created through ha-airlock on 2026-11-13 after the owner's approval.
-   Read back beside ha-airlock: Home Assistant stored
-   `{"min":0.0,"max":10.0,"step":1.0,"mode":"slider","name":…}` for a
-   request of `min 0, max 10` — the difference #35 was built for. Next: the
-   owner presses **Undo** on that change in the sidebar page; then read
-   `input_number/list` and `config/entity_registry/get` to see it gone, and
-   record both observations in ADR 0006 *Measured*. The helper controls no
-   device; it is the owner's to keep or undo.
+1. Done 2026-11-15: the undo of `input_number.ha_airlock_number_test` is
+   measured and recorded in ADR 0006 *Measured*.
 2. ADR 0006 step 2, rest: areas, labels, the entity registry. Plan and the
    reading of Core's WebSocket commands are Fable's (a fact note with
    `path:line` at Core `3f8160ce7ff`); the implementation follows the
@@ -36,8 +29,7 @@ and the entity registry.
    moving the sidebar page out of `internal/oauth`.
 5. The owner: revoke the first token pasted in chat (not confirmed).
 
-**Next step.** Item 1 when the owner has pressed Undo; otherwise item 2,
-starting with a Fable fact note on Core's area and label commands.
+**Next step.** Item 2, starting with a Fable fact note on Core's area and label commands.
 
 **How to work with the instance.** Writes need the owner's approval and a
 target the owner names (`CLAUDE.md`). A parked call waits five minutes; the

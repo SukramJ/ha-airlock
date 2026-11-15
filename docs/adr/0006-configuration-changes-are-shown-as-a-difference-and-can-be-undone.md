@@ -400,9 +400,34 @@ client:
   registry answered `not_found` for the entity and the state was gone
   (HTTP 404). The owner's other helpers were unchanged.
 - The owner reported the table of a change request as readable.
+- Through 0.8.0-dev (the version as the hand-over records it; not read
+  from the instance), 2026-11-13: `input_number_create` with the name
+  "ha-airlock number test", `min` 0 and `max` 10 and nothing else
+  created, after the owner's approval, an item that
+  `input_number/list` returned as `"min":0.0,"max":10.0,"step":1.0,
+  "mode":"slider"`: Home Assistant stored two keys the request did not
+  name. The registry held the entity with the label `airlock`.
+- 2026-11-15, Core 2026.11.1: the same item was still unchanged in
+  `input_number/list` and in the registry, and the state answered HTTP
+  200, before the owner pressed **Undo** on that change in the sidebar
+  page. Afterwards `input_number/list` no longer held the item, the
+  registry answered `not_found` for the entity and the state answered
+  HTTP 404. The owner's four other `input_number` helpers were identical
+  before and after.
 
 Read beside ha-airlock with an administrator's token: the registry and
-`input_boolean/list` after each step.
+`input_boolean/list` or `input_number/list` after each step.
+
+Inferred, not observed: an undo writes only when the object's present
+state hashes equal to the state the journal holds for it
+(`internal/gate/gate.go:458-465`): the state read back after the
+change, or the request where none was stored
+(`internal/changes/changes.go:75-80`). This rests on the running App
+being built from these lines; its version was not read from the
+instance. That this undo went through although
+the stored item carried `step` and `mode` suggests the journal held the
+state read back after the creation, not the request; the journal itself
+was not read.
 
 ## Unverified
 
@@ -432,9 +457,8 @@ Not measured:
 - That the check's reading of an action is the reading Core makes, for
   every action type. The check is to be written against Core's schemas
   and tested per type; until then this is an intention.
-- That the state read back differs from the state asked for on a running
-  system. It is read from the schemas of the other helper domains;
-  `input_boolean` has no default, so the measurements above could not
-  show it.
+- That the state read back differs from the state asked for in every
+  helper domain. It was observed for `input_number` (above); for the
+  other domains it is read from their schemas.
 - The size of real configurations and of their differences on the
   owner's instance.
