@@ -3,43 +3,26 @@
 The state a fresh session starts from. Rewritten at each hand-over, never
 appended to; the history is in git.
 
-## 2026-11-15, night — ADR 0006 step 2 built, pull request open
+## 2026-11-15, evening — registry tools measured on the instance
 
-**State.** `main` at #39. Branch **`feature/registry-changes`**: the
-registry tools are wired (`catalog.All()`), tested and documented — steps
-1–5 of the earlier plan are done; the pull request is open with
-auto-merge. The App on the owner's instance is unchanged (`0.8.0-dev`,
-policy file in `/addon_configs/816cd011_ha_airlock`: local R0 allow, R1
-approval, R2 approval, `helper` change approval). Catalogue: 18 R0, 6 R1,
-29 R2.
-
-**Done.** `registries.go` read against B.2 (fixed: `default` in the
-`Carrier` switches; label creation declares `config/area_registry/list`
-for its undo; the undo of `area_update` / `entity_update` checks again
-that the floor / area exists). Catalogue tests
-`internal/catalog/registries_test.go`, wiring tests
-`cmd/ha-airlock/registries_test.go` (each kind parked → approved →
-written → journalled → undone, `area_create` labelled by the gate; each
-kind `kind_denied`; unlabelled area and entity refused; control label
-refused; label creation without the control label refused; area with
-`release: all` parked). `provisiontest.Home.CoreMessages` records message
-bodies. Bite proofs observed red for: Revert key allow-lists (area,
-entity), emptiness check, set sort, floor reference (plan and undo), and
-through the running server for the gate's control-label, label-existence
-and area-release checks. ADR 0006 amended for D1–D5 and A.4; Fable read
-it against the fact note, its three citation findings are fixed.
+**State.** `main` at #40. The App on the owner's instance runs 0.8.0-dev
+rebuilt from #40 (53 tools), policy file in
+`/addon_configs/816cd011_ha_airlock`: local R0 allow, R1 approval, R2
+approval; `helper`, `area`, `label`, `entity` with `change: approval`.
+The measurement of ADR 0006 step 2 is done and recorded in ADR 0006
+*Measured* (branch `docs/registry-measured`): entity rename, area
+create/rename, label create/recolour, each undone; nothing of the test
+objects is left on the instance.
 
 **Next steps, in order.**
 
-1. After the merge: measurement on the owner's instance with objects the
-   owner names, the policy file opened for `area`, `label`, `entity`
-   Objects named by the owner on 2026-11-15: `entity_update` on
-   `input_boolean.ha_airlock_test` (rename, undo); a new area
-   "ha-airlock Test" (create, rename, undo both); a new label
-   "ha-airlock Test-Label" (create, change colour, undo both). Before:
-   the App updated to the merged version, the policy file opening
-   `area`, `label` and `entity` with `change: approval`.
-2. D6: declared endpoints enforced by the gate (own slice).
+1. Bump `version` in `config.yaml` with every merge that changes code
+   the instance runs: with `0.8.0-dev` unchanged, "Rebuild" built the
+   old checkout until the owner reloaded the App store. Own small PR.
+2. Log a refused form on the sidebar page (`internal/oauth/consent.go`
+   `checked`): two undo presses so far had no effect and left no log
+   line; the cause is not established (ADR 0006 *Unverified*).
+3. D6: declared endpoints enforced by the gate (own slice).
 
 **From Fable's security read (LOW, recorded, not fixed).** The undo of
 an `entity_update` can be refused by Core (device entity with an own area
@@ -51,8 +34,8 @@ and the creation (a race; needs a stand-in test).
 **This machine.** The lint tools are in `$(go env GOPATH)/bin`, which is
 not on `PATH`; `export PATH="$(go env GOPATH)/bin:$PATH"` before `make ci`.
 
-**Other open points.** ADR 0006 *Unverified*: undo of an update and of a
-deletion, and a refused undo, on a running system; the state of an
+**Other open points.** ADR 0006 *Unverified*: undo of a deletion and a
+refused undo on a running system; the state of an
 `input_text` in the password mode is still readable through the
 state-reading tools. Not built: the sidebar page showing the policy in
 force; `remote` profile redaction; audit log rotation; repair of a torn
@@ -72,6 +55,11 @@ that token is not there**: the owner provides one, kept outside the
 repository.
 
 **Lessons.**
+
+- After a reconnect the MCP client knows a new catalogue only through
+  `/mcp` → Reconnect; a server added mid-session needs a new session.
+- Read the tool list as the check that the App runs the merged code;
+  the version string does not change between merges.
 
 - Check the instance before trusting a reported action: the first "Undo
   pressed" had not reached it; the App log (a refused undo logs `WARN
