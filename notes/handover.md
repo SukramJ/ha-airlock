@@ -33,7 +33,12 @@ it against the fact note, its three citation findings are fixed.
 
 1. After the merge: measurement on the owner's instance with objects the
    owner names, the policy file opened for `area`, `label`, `entity`
-   (ask the owner for the objects first — wizard).
+   Objects named by the owner on 2026-11-15: `entity_update` on
+   `input_boolean.ha_airlock_test` (rename, undo); a new area
+   "ha-airlock Test" (create, rename, undo both); a new label
+   "ha-airlock Test-Label" (create, change colour, undo both). Before:
+   the App updated to the merged version, the policy file opening
+   `area`, `label` and `entity` with `change: approval`.
 2. D6: declared endpoints enforced by the gate (own slice).
 
 **From Fable's security read (LOW, recorded, not fixed).** The undo of
