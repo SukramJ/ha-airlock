@@ -16,9 +16,9 @@ objects is left on the instance.
 
 **Next steps, in order.**
 
-1. Bump `version` in `config.yaml` with every merge that changes code
-   the instance runs: with `0.8.0-dev` unchanged, "Rebuild" built the
-   old checkout until the owner reloaded the App store. Own small PR.
+1. Done: `config.yaml` at `0.9.0-dev`; the bump per PR is now a rule in
+   `CLAUDE.md` (Git Workflow). With `0.8.0-dev` unchanged, "Rebuild" had
+   built the old checkout until the owner reloaded the App store.
 2. Log a refused form on the sidebar page (`internal/oauth/consent.go`
    `checked`): two undo presses so far had no effect and left no log
    line; the cause is not established (ADR 0006 *Unverified*).

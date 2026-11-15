@@ -267,6 +267,12 @@ Repository documents are English.
 - Every PR passes `make ci`; `make race` before a release.
 - Commits are signed off (`git commit -s`).
 - User-visible changes get a `CHANGELOG.md` entry under `[Unreleased]`.
+- **A PR that changes what the App runs bumps `version` in `config.yaml`**
+  (a new tool or behaviour: minor; a fix: patch; the `-dev` suffix stays
+  until a release). Observed on the owner's instance: with the version
+  unchanged, "Rebuild" built the old checkout until the App store was
+  reloaded (the Supervisor's reason is not read from its source:
+  unverified). Reviewed.
 - Never push `--force` to `main`.
 - **Push, pull request and tag are the session's own calls.** An
   implementing agent works locally and reports; the owner's session reads
