@@ -183,7 +183,7 @@ func TestCreationIsPlannedFromTheArgumentsAndWritesOnlyWhenApplied(t *testing.T)
 		t.Fatalf("plan: %v", err)
 	}
 	if len(change.Before) != 0 || string(change.After) != `{"initial":false,"name":"Movie night"}` || change.Object != "" ||
-		change.Entity != "" || change.Name != "" || change.Summary != "Create a toggle helper" || len(home.sent) != 0 {
+		change.Holder != "" || change.Name != "" || change.Summary != "Create a toggle helper" || len(home.sent) != 0 {
 		t.Fatalf("change = %+v, sent %v", change, home.sent)
 	}
 
@@ -205,7 +205,7 @@ func TestUpdateIsPlannedAgainstTheStoredItemAndReplacesIt(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	if string(change.Before) != `{"icon":"mdi:account","name":"Guest mode"}` || string(change.After) != `{"name":"Visitors"}` ||
-		change.Object != "input_boolean.guests" || change.Entity != "input_boolean.guests" || change.Name != "Guests here" ||
+		change.Object != "input_boolean.guests" || change.Holder != "input_boolean.guests" || change.Name != "Guests here" ||
 		change.Summary != "Change the toggle helper input_boolean.guests" {
 		t.Fatalf("change = %+v", change)
 	}
@@ -233,7 +233,7 @@ func TestDeletionIsPlannedWithWhatWillBeGone(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	if string(change.Before) != `{"name":"Party"}` || len(change.After) != 0 || change.Object != "input_boolean.party" ||
-		change.Entity != "input_boolean.party" || change.Name != "Party" || change.Summary != "Delete the toggle helper input_boolean.party" {
+		change.Holder != "input_boolean.party" || change.Name != "Party" || change.Summary != "Delete the toggle helper input_boolean.party" {
 		t.Fatalf("change = %+v", change)
 	}
 

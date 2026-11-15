@@ -65,6 +65,11 @@ func TestEveryToolIsFullyDeclared(t *testing.T) {
 		if tool.Kind != "" && !slices.Contains(catalog.Kinds(), tool.Kind) {
 			t.Errorf("tool %q has kind %q, which is not a kind", tool.Name, tool.Kind)
 		}
+		// The gate refuses every change of a kind that does not say what
+		// carries its label; a tool of such a kind could never run.
+		if tool.Kind != "" && tool.Kind.Carrier() == catalog.CarrierUndeclared {
+			t.Errorf("tool %q has kind %q, which declares no carrier of its label", tool.Name, tool.Kind)
+		}
 		if (tool.Act != nil) != (tool.Tier != catalog.R0 && !changes) {
 			t.Errorf("tool %q (tier %s): a tool states its action exactly when it is above R0 and has no plan", tool.Name, tool.Tier)
 		}

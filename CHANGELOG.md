@@ -134,6 +134,9 @@ All notable changes to ha-airlock are recorded here. The format follows
 
 ### Fixed
 
+- A new object whose control label Home Assistant did not keep is
+  reported in the audit record: Home Assistant drops a label id it does
+  not know and still answers success, and the gate now reads the answer.
 - A notification that an action waits no longer stays in Home Assistant
   after ha-airlock was restarted: waiting requests do not outlive a
   restart, and the start takes the notification away.

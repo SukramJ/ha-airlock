@@ -69,6 +69,25 @@ type home struct {
 	labels   map[string][]string
 	names    map[string]string
 	services []string
+	// areas are the labels of each area in the area registry.
+	areas map[string][]string
+	// registry is the label registry; unknown, labels Home Assistant drops
+	// from a write without an error, as it does an id it does not know.
+	registry []string
+	unknown  map[string]bool
+	// updates are the registry updates written, as sent.
+	updates []string
+}
+
+// kept is what Home Assistant keeps of a label set it was sent.
+func (h *home) kept(labels []string) []string {
+	out := []string{}
+	for _, l := range labels {
+		if !h.unknown[l] {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 func (h *home) Call(_ context.Context, command string, params, out any) error {
@@ -102,11 +121,48 @@ func (h *home) Call(_ context.Context, command string, params, out any) error {
 		if _, ok := h.labels[p.EntityID]; !ok {
 			return errors.New("home assistant command failed: not_found: Entity not found")
 		}
-		h.labels[p.EntityID] = p.Labels
-		return nil
+		h.updates = append(h.updates, command+" "+string(raw))
+		h.labels[p.EntityID] = h.kept(p.Labels)
+		answer, _ := json.Marshal(map[string]any{"entity_entry": map[string]any{"entity_id": p.EntityID, "labels": h.labels[p.EntityID]}})
+		return decodeInto(answer, out)
+	case "config/area_registry/list":
+		list := []map[string]any{}
+		for id, labels := range h.areas {
+			list = append(list, map[string]any{"area_id": id, "name": id, "labels": labels})
+		}
+		answer, _ := json.Marshal(list)
+		return json.Unmarshal(answer, out)
+	case "config/area_registry/update":
+		var p struct {
+			AreaID string   `json:"area_id"`
+			Labels []string `json:"labels"`
+		}
+		_ = json.Unmarshal(raw, &p)
+		if _, ok := h.areas[p.AreaID]; !ok {
+			return errors.New("home assistant command failed: unknown_error")
+		}
+		h.updates = append(h.updates, command+" "+string(raw))
+		h.areas[p.AreaID] = h.kept(p.Labels)
+		answer, _ := json.Marshal(map[string]any{"area_id": p.AreaID, "labels": h.areas[p.AreaID]})
+		return decodeInto(answer, out)
+	case "config/label_registry/list":
+		list := []map[string]any{}
+		for _, id := range h.registry {
+			list = append(list, map[string]any{"label_id": id, "name": id})
+		}
+		answer, _ := json.Marshal(list)
+		return json.Unmarshal(answer, out)
 	default:
 		return errors.New("unexpected command " + command)
 	}
+}
+
+// decodeInto decodes a result where the caller wants one.
+func decodeInto(answer []byte, out any) error {
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(answer, out)
 }
 
 func (h *home) labelsOf(entity string) []string {
@@ -151,8 +207,11 @@ func newFixture(t *testing.T, pol policy.Policy, extra ...catalog.Tool) fixture 
 	f := fixture{
 		auditPath: path, runs: map[catalog.Tier]*atomic.Int32{}, halted: &atomic.Bool{}, approvals: approval.New(log, nil, time.Now),
 		home: &home{
-			labels: map[string][]string{"light.kitchen": {"other", "airlock"}, "light.hall": {"airlock"}, "light.cellar": {"other"}},
-			names:  map[string]string{"light.kitchen": "Kitchen ceiling"},
+			labels:   map[string][]string{"light.kitchen": {"other", "airlock"}, "light.hall": {"airlock"}, "light.cellar": {"other"}},
+			names:    map[string]string{"light.kitchen": "Kitchen ceiling"},
+			areas:    map[string][]string{"kitchen": {"other", "airlock"}, "cellar": {"other"}},
+			registry: []string{"airlock", "other", "kitchen"},
+			unknown:  map[string]bool{},
 		},
 	}
 	f.journalDir = filepath.Join(t.TempDir(), "journal")
