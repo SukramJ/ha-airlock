@@ -53,6 +53,9 @@ type Home struct {
 	// CoreCommands are the commands Core's WebSocket received, other than
 	// service calls.
 	CoreCommands []string
+	// CoreMessages are the same commands with what they carried: the
+	// type, a space, and the message as it arrived.
+	CoreMessages []string
 }
 
 // NewHome starts the stand-in; it stops with the test.
@@ -167,6 +170,7 @@ func (h *Home) coreCommand(commandType string, raw json.RawMessage) (result, err
 		h.Mu.Lock()
 		defer h.Mu.Unlock()
 		h.CoreCommands = append(h.CoreCommands, commandType)
+		h.CoreMessages = append(h.CoreMessages, commandType+" "+string(raw))
 		if canned, ok := h.CoreResults[commandType]; ok {
 			for then, result := range h.CoreThen[commandType] {
 				h.CoreResults[then] = result

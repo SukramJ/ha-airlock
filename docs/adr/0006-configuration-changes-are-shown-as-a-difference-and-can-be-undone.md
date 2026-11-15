@@ -213,16 +213,57 @@ them. They are not limited to released objects.
   creates the helper again and gives the label back. The name and the
   area the owner gave the entity are not stored and not restored; this is
   less than this record first said.
-- **Areas**: create and update of name, icon, floor, aliases and picture.
-  Delete only for an area nothing is assigned to; the entities and devices
-  of an area lose their assignment when it goes, and the journal does not
-  hold those.
+- **Areas**: create and update of name, icon, floor, aliases and picture;
+  an update changes only the fields the client names. An area carries the
+  release label itself, in the area registry; its labels and its
+  temperature and humidity sensors are shown and bound, never written.
+  The floor must be one `floor_list` names: Core stores any floor id it
+  is given (`homeassistant/helpers/area_registry.py:302-312`, `:398-410`,
+  Core 3f8160ce7ff). The picture is `null` or a path on this Home
+  Assistant, beginning with one `/`: Core takes any string
+  (`homeassistant/components/config/area_registry.py:49`, `:119`), and
+  every browser that shows the area would load a remote address. **No
+  delete** (amended 2026-11-15): an area that is created again gets the
+  slug of its present name as its id, and the old id only if that slug
+  is the old one and free (`homeassistant/helpers/area_registry.py:271-273`,
+  `homeassistant/helpers/normalized_name_base_registry.py:70-77`);
+  automations and dashboards that name the area by its id are in no
+  registry; and Home Assistant clears the area from deleted devices and
+  entities too (`homeassistant/helpers/device_registry.py:4810-4816`,
+  `homeassistant/helpers/entity_registry.py:2756-2760`), which neither
+  `config/device_registry/list` nor `config/entity_registry/list` shows. The rule above,
+  that a deletion is offered only where an undo can restore it, is not
+  met. The undo of an area's creation deletes it, and only while no
+  entity and no device names it.
 - **Labels**: create and update of name, colour, icon and description,
   except for the release label. No delete: every assignment of the label
   goes with it and cannot be restored from the journal. This is narrower
-  than the owner's "deleting from the start", for this reason.
+  than the owner's "deleting from the start", for this reason. The undo
+  of a label's creation deletes it, and only while no entity, device or
+  area carries it. Two rules sit in the gate, which alone knows the
+  release label: a change whose object is the release label is refused,
+  also as an undo; and no label is created while the release label does
+  not exist in Home Assistant, because a new label whose name leads to
+  the release label's id would get that id
+  (`homeassistant/helpers/label_registry.py:130-132`, Core 3f8160ce7ff).
 - **Entity registry**: name, icon and area of a released entity. Nothing
-  else.
+  else. The area must be one `area_list` names: Core does not check it
+  (`homeassistant/helpers/entity_registry.py:2085-2132`). A client clears
+  the name with `null`; an empty name is a value of its own in Core
+  (`homeassistant/helpers/entity_registry.py:330-336`) and is refused.
+  Core refuses an update of the name or the area that would leave an
+  entity of a device with an area of its own and no name of its own
+  (`homeassistant/helpers/entity_registry.py:1347-1353`, `:2197-2215`);
+  that refusal is passed on, also to an undo.
+
+What carries the release label is declared per kind: the entity for a
+helper and for the entity registry, the area itself for an area, nothing
+for a label. The gate checks the release, and labels what it created,
+on that carrier. Core drops a label id it does not know and answers
+success (`homeassistant/components/config/area_registry.py:143-145`,
+`homeassistant/components/config/entity_registry.py:242-244`,
+`homeassistant/helpers/label_registry.py:274-281`); the gate reads Home
+Assistant's answer and reports a label that was not kept.
 
 ### Configuration that acts
 
@@ -365,6 +406,17 @@ before anything below them was measured.
   notification goes.
 - **Undo restores configuration, not history.** What an automation did
   while it existed is done.
+- **The commands a tool sends are declared, not enforced.** A tool
+  names the Home Assistant commands it uses, but the gate hands it a
+  connection that can send any. The area and entity tools are the first
+  where one wrong key (`labels`) would release an object; until the gate
+  enforces the declaration, a test applies every registry tool and its
+  undo against a recording stand-in and refuses any message that carries
+  `labels`, `new_entity_id`, `disabled_by` or `hidden_by`.
+- **An undo does not ask for the release again.** The administrator
+  who takes a change back in the sidebar page can write an entity whose
+  label the owner removed since; an area's labels are part of its state,
+  so an area changed since is not written.
 - **The journal is a file.** Whoever can write the App's data directory
   can change what an undo would restore; the same holds for the policy
   file.
@@ -449,10 +501,15 @@ Not measured:
   `components/config/view.py`, not observed.
 - What `async_validate_config_item` accepts and refuses for automations
   and scripts; it was not read.
-- Which identifier a helper, an area or an automation gets when it is
-  created again after a deletion, and so whether an undo of a deletion
-  gives back the same entity id. For a new helper the id was the slug of
-  its name; a second creation with the same name was not tried.
+- Which identifier a helper or an automation gets when it is created
+  again after a deletion, and so whether an undo of a deletion gives back
+  the same entity id. For a new helper the id was the slug of its name; a
+  second creation with the same name was not tried. For an area it is
+  read from source (above), not observed.
+- Areas, labels and the entity registry on a running system: none of
+  their tools was measured yet. Whether the owner's Core 2026.11.1 has
+  the rule on entities of a device without a name of their own is not
+  established; it was read at 3f8160ce7ff.
 - What a reload after a write does to automations that are running.
 - That the check's reading of an action is the reading Core makes, for
   every action type. The check is to be written against Core's schemas

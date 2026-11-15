@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -87,6 +88,9 @@ var (
 	ErrNotMade = errors.New("the change was not made; there is nothing to undo")
 	// ErrNoUndo reports a change this server cannot take back.
 	ErrNoUndo = errors.New("this change cannot be undone by this server")
+	// ErrControlLabel reports a change of the label that releases objects
+	// for control. No tool and no undo changes it.
+	ErrControlLabel = errors.New("the object is the control label, which ha-airlock does not change")
 )
 
 // Config is what a gate is built from.
@@ -295,7 +299,9 @@ func finish(result json.RawMessage, entry *audit.Entry) Outcome {
 // for the kind; the tool's plan, which reads what is there now; the release
 // of an existing object; the approval, bound to the state that was read;
 // the journal; the change itself. A creation is given the control label
-// afterwards, here and nowhere else.
+// afterwards, here and nowhere else. Where the label sits is the kind's
+// Carrier; the rules for the control label itself are here as well, not in
+// a tool, because only the gate knows which label it is.
 func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *catalog.Tool, args json.RawMessage, entry *audit.Entry) Outcome {
 	if tool.Plan == nil || tool.Revert == nil || tool.Kind == "" || tool.Act != nil || tool.Handler != nil {
 		entry.Decision, entry.Result = "undeclared_change", "refused"
@@ -317,35 +323,33 @@ func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *c
 		entry.Result = "error: " + message
 		return Outcome{Message: message}
 	}
-	creation, labelled := len(plan.Before) == 0, false
+	creation := len(plan.Before) == 0
+	carrier := tool.Kind.Carrier()
 	switch {
-	case plan.Apply == nil, creation && len(plan.After) == 0, !creation && plan.Entity == "":
+	case carrier == catalog.CarrierUndeclared, plan.Apply == nil, creation && len(plan.After) == 0,
+		!creation && (plan.Holder == "") != (carrier == catalog.CarrierNone):
 		entry.Decision, entry.Result = "undeclared_change", "refused"
 		return Outcome{Message: "the tool does not declare what it changes"}
 	case len(plan.Before)+len(plan.After) > approval.MaxDifferenceBytes:
 		entry.Decision, entry.Result = "too_large", "refused"
 		return Outcome{Message: fmt.Sprintf("the change is larger than %d bytes and cannot be put before the owner", approval.MaxDifferenceBytes)}
 	}
+	if tool.Kind == catalog.KindLabel {
+		if refusal := g.controlLabelUntouched(runCtx, plan.Object, creation); refusal != "" {
+			entry.Decision, entry.Result = "control_label", "refused: "+refusal
+			return Outcome{Message: "this change is refused: " + refusal}
+		}
+	}
 
 	request := approval.Request{
 		Client: principal.Client, Tool: tool.Name, Summary: plan.Summary, Arguments: entry.Arguments,
 		Change: &approval.Difference{Kind: string(tool.Kind), Object: plan.Object, Name: plan.Name, Before: plan.Before, After: plan.After},
 	}
-	switch {
-	case creation:
-		request.Change.Note = fmt.Sprintf("ha-airlock will put the label %q on the new object: the application can then "+
-			"ask to change it again, each time with your approval.", g.policy.ControlLabel())
-	default:
-		// Whether the object carries the label is read in any case: the
-		// journal notes it, for an undo. It decides only where the kind is
-		// released by the label.
-		entities, refusal := g.released(runCtx, []string{plan.Entity})
-		if refusal != "" && kind.Release == policy.ReleaseLabel {
-			entry.Decision, entry.Result = "not_released", "refused: "+refusal
-			return Outcome{Message: fmt.Sprintf("this object is not released for change; the owner releases it by giving it "+
-				"the label %q in Home Assistant", g.policy.ControlLabel())}
-		}
-		request.Entities, labelled = entities, refusal == ""
+	labelled, refusal := g.release(runCtx, carrier, kind.Release, &plan, &request)
+	if refusal != "" {
+		entry.Decision, entry.Result = "not_released", "refused: "+refusal
+		return Outcome{Message: fmt.Sprintf("this object is not released for change; the owner releases it by giving it "+
+			"the label %q in Home Assistant", g.policy.ControlLabel())}
 	}
 
 	before, err := changes.Hash(plan.Before)
@@ -375,6 +379,36 @@ func (g *Gate) change(ctx, runCtx context.Context, principal *Principal, tool *c
 	return outcome
 }
 
+// release decides whether the object of a change may be changed, as the
+// kind's carrier and release say, and fills in what the owner is shown.
+// labelled reports whether the object carries the control label now; the
+// journal notes it, for an undo. refusal is the reason it may not be
+// changed, or "".
+func (g *Gate) release(ctx context.Context, carrier catalog.Carrier, release policy.Release, plan *catalog.Change, request *approval.Request) (labelled bool, refusal string) {
+	switch {
+	case len(plan.Before) == 0 && carrier != catalog.CarrierNone:
+		request.Change.Note = fmt.Sprintf("ha-airlock will put the label %q on the new object: the application can then "+
+			"ask to change it again, each time with your approval.", g.policy.ControlLabel())
+		return false, ""
+	case len(plan.Before) == 0:
+		return false, ""
+	case carrier == catalog.CarrierNone:
+		// Nothing carries a label, so nothing can be released by one.
+		if release == policy.ReleaseLabel {
+			return false, "objects of this kind carry no label"
+		}
+		return false, ""
+	}
+	// Whether the object carries the label is read in any case. It decides
+	// only where the kind is released by the label.
+	entities, missing := g.holds(ctx, carrier, plan.Holder)
+	if missing != "" && release == policy.ReleaseLabel {
+		return false, missing
+	}
+	request.Entities = entities
+	return missing == "", ""
+}
+
 // write makes an approved change: the journal first, then Home Assistant,
 // then the label for what was created.
 func (g *Gate) write(ctx, runCtx context.Context, principal *Principal, tool *catalog.Tool, plan *catalog.Change, released bool, entry *audit.Entry) Outcome {
@@ -396,8 +430,8 @@ func (g *Gate) write(ctx, runCtx context.Context, principal *Principal, tool *ca
 		return Outcome{Allowed: true, Message: message}
 	}
 	labelled := ""
-	if len(plan.Before) == 0 {
-		if err := g.label(runCtx, object); err != nil {
+	if carrier := tool.Kind.Carrier(); len(plan.Before) == 0 && carrier != catalog.CarrierNone {
+		if err := g.label(runCtx, carrier, object); err != nil {
 			labelled = "; the control label could not be set on the new object"
 		}
 	}
@@ -450,6 +484,11 @@ func (g *Gate) Undo(ctx context.Context, id, by string) error {
 		}
 		return err
 	}
+	// The control label is read now: the owner may have pointed it at a
+	// label ha-airlock created or changed.
+	if tool.Kind == catalog.KindLabel && change.Object == g.policy.ControlLabel() {
+		return fail("not undone: change "+change.ID+": the object is the control label", ErrControlLabel)
+	}
 	plan, err := tool.Revert(runCtx, g.core, change.Object, change.Before, change.Held())
 	if err != nil {
 		message, _ := redact.String(err.Error())
@@ -470,8 +509,8 @@ func (g *Gate) Undo(ctx context.Context, id, by string) error {
 	}
 	note := ""
 	// A deleted object that carried the control label gets it back.
-	if len(change.After) == 0 && change.Released {
-		if err := g.label(runCtx, object); err != nil {
+	if carrier := tool.Kind.Carrier(); len(change.After) == 0 && change.Released && carrier != catalog.CarrierNone {
+		if err := g.label(runCtx, carrier, object); err != nil {
 			note = "; the control label could not be set on " + object
 		}
 	}
@@ -486,31 +525,140 @@ func (g *Gate) Undo(ctx context.Context, id, by string) error {
 }
 
 // label puts the control label on an object ha-airlock created, beside the
-// labels it has. No argument of a client reaches this function.
-func (g *Gate) label(ctx context.Context, entity string) error {
-	if entity == "" {
-		return errors.New("the new object has no entity")
-	}
-	var reg struct {
-		Labels []string `json:"labels"`
-	}
-	if err := g.core.Call(ctx, "config/entity_registry/get", map[string]string{"entity_id": entity}, &reg); err != nil {
-		return fmt.Errorf("read the new object's registry entry: %w", err)
+// labels it has, on what the carrier says carries it. No argument of a
+// client reaches this function. Home Assistant drops a label id it does not
+// know without an error, so the answer is read: a label that is not in it
+// was not set.
+func (g *Gate) label(ctx context.Context, carrier catalog.Carrier, id string) error {
+	if id == "" {
+		return errors.New("the new object has no identifier")
 	}
 	label := g.policy.ControlLabel()
-	for _, l := range reg.Labels {
-		if l == label {
-			return nil
+	var (
+		labels  []string
+		command string
+		update  map[string]any //nolint:revive // the WebSocket message: identifier key and labels
+		answer  func(json.RawMessage) ([]string, error)
+	)
+	switch carrier {
+	case catalog.CarrierEntity:
+		var reg struct {
+			Labels []string `json:"labels"`
 		}
+		if err := g.core.Call(ctx, "config/entity_registry/get", map[string]string{"entity_id": id}, &reg); err != nil {
+			return fmt.Errorf("read the new object's registry entry: %w", err)
+		}
+		labels, command, update = reg.Labels, "config/entity_registry/update", map[string]any{"entity_id": id}
+		answer = func(raw json.RawMessage) ([]string, error) {
+			var out struct {
+				Entry struct {
+					Labels []string `json:"labels"`
+				} `json:"entity_entry"`
+			}
+			err := json.Unmarshal(raw, &out)
+			return out.Entry.Labels, err
+		}
+	case catalog.CarrierArea:
+		area, err := g.area(ctx, id)
+		if err != nil {
+			return fmt.Errorf("read the new area: %w", err)
+		}
+		labels, command, update = area.Labels, "config/area_registry/update", map[string]any{"area_id": id}
+		answer = func(raw json.RawMessage) ([]string, error) {
+			var out struct {
+				Labels []string `json:"labels"`
+			}
+			err := json.Unmarshal(raw, &out)
+			return out.Labels, err
+		}
+	default:
+		return fmt.Errorf("objects carried by %q carry no label", carrier)
 	}
-	update := struct {
-		EntityID string   `json:"entity_id"`
-		Labels   []string `json:"labels"`
-	}{EntityID: entity, Labels: append(reg.Labels, label)}
-	if err := g.core.Call(ctx, "config/entity_registry/update", update, nil); err != nil {
+	if slices.Contains(labels, label) {
+		return nil
+	}
+	update["labels"] = append(slices.Clone(labels), label)
+	var raw json.RawMessage
+	if err := g.core.Call(ctx, command, update, &raw); err != nil {
 		return fmt.Errorf("label the new object: %w", err)
 	}
+	held, err := answer(raw)
+	if err != nil || !slices.Contains(held, label) {
+		return errors.New("label the new object: Home Assistant did not keep the label")
+	}
 	return nil
+}
+
+// registryArea is an area as config/area_registry/list gives it, as far as
+// the gate reads it.
+type registryArea struct {
+	ID     string   `json:"area_id"`
+	Name   string   `json:"name"`
+	Labels []string `json:"labels"`
+}
+
+// area reads one area. The area registry has no command for one area, so
+// the list is read.
+func (g *Gate) area(ctx context.Context, id string) (registryArea, error) {
+	var areas []registryArea
+	if err := g.core.Call(ctx, "config/area_registry/list", nil, &areas); err != nil {
+		return registryArea{}, err
+	}
+	for _, a := range areas {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return registryArea{}, errors.New("there is no area " + id)
+}
+
+// holds checks that the object that carries the label for a change, as the
+// carrier says, carries it. Entities come back for the approval page; an
+// area is shown there as the object itself.
+func (g *Gate) holds(ctx context.Context, carrier catalog.Carrier, id string) (entities []approval.Entity, refusal string) {
+	switch carrier {
+	case catalog.CarrierEntity:
+		return g.released(ctx, []string{id})
+	case catalog.CarrierArea:
+		area, err := g.area(ctx, id)
+		if err != nil {
+			message, _ := redact.String(err.Error())
+			return nil, id + ": " + message
+		}
+		if !slices.Contains(area.Labels, g.policy.ControlLabel()) {
+			return nil, id + " does not carry the label " + g.policy.ControlLabel()
+		}
+		return nil, ""
+	default:
+		return nil, "objects carried by " + string(carrier) + " carry no label"
+	}
+}
+
+// controlLabelUntouched applies the rules for changes of the kind label:
+// the control label itself is not changed, and no label is created while
+// the control label does not exist, because Home Assistant would give the
+// new label the control label's id if its name led there. It returns the
+// refusal, or "".
+func (g *Gate) controlLabelUntouched(ctx context.Context, object string, creation bool) string {
+	label := g.policy.ControlLabel()
+	if object == label {
+		return "the object is the control label " + label
+	}
+	if !creation {
+		return ""
+	}
+	var labels []struct {
+		ID string `json:"label_id"`
+	}
+	if err := g.core.Call(ctx, "config/label_registry/list", nil, &labels); err != nil {
+		return "the labels could not be read"
+	}
+	for _, l := range labels {
+		if l.ID == label {
+			return ""
+		}
+	}
+	return "the control label " + label + " does not exist in Home Assistant; create it there first"
 }
 
 // approval takes a call the policy wants approved to the store, under the

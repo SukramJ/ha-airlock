@@ -132,8 +132,23 @@ All notable changes to ha-airlock are recorded here. The format follows
   created. The input schema of a tool names every field its domain
   requires.
 
+- Areas, labels and the entity registry can be changed: `area_create`,
+  `area_update`, `label_create`, `label_update` and `entity_update` (name,
+  icon and area of a released entity), each changing only the fields it
+  is given, and `area_list`, `label_list` and `floor_list` to read them.
+  An area is released by carrying the owner's label itself and is given
+  it when ha-airlock creates it; a label is of kind `label`, which the
+  policy file opens for all labels but the control label. No tool deletes
+  an area or a label; the undo of a creation does, while nothing refers
+  to it. A floor or an area a change names must exist, and an area's
+  picture must be a path on this Home Assistant. ADR 0006 records the
+  narrowing.
+
 ### Fixed
 
+- A new object whose control label Home Assistant did not keep is
+  reported in the audit record: Home Assistant drops a label id it does
+  not know and still answers success, and the gate now reads the answer.
 - A notification that an action waits no longer stays in Home Assistant
   after ha-airlock was restarted: waiting requests do not outlive a
   restart, and the start takes the notification away.

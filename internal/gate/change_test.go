@@ -104,7 +104,7 @@ func (h *helpers) tools(f *fixture) []catalog.Tool {
 				return object, json.RawMessage(`{}`), nil
 			}
 		}
-		return catalog.Change{Summary: "Take back", Object: object, Entity: object, Before: json.RawMessage(present), After: state, Apply: apply}, nil
+		return catalog.Change{Summary: "Take back", Object: object, Holder: object, Before: json.RawMessage(present), After: state, Apply: apply}, nil
 	}
 	return []catalog.Tool{
 		{
@@ -151,7 +151,7 @@ func (h *helpers) tools(f *fixture) []catalog.Tool {
 					return catalog.Change{}, errors.New("there is no such helper")
 				}
 				return catalog.Change{
-					Summary: "Change helper " + entity, Object: entity, Name: "Guests", Entity: entity,
+					Summary: "Change helper " + entity, Object: entity, Name: "Guests", Holder: entity,
 					Before: json.RawMessage(before), After: json.RawMessage(after), Apply: write(entity, after), Left: h.left,
 				}, nil
 			},

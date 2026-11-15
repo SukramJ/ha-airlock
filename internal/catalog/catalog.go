@@ -53,6 +53,39 @@ func Kinds() []Kind {
 	return []Kind{KindHelper, KindArea, KindLabel, KindEntity, KindScene, KindScript, KindAutomation, KindDashboard}
 }
 
+// Carrier is what carries the label that releases an object of a kind for
+// change, and what ha-airlock labels when it creates one.
+type Carrier string
+
+// The carriers.
+const (
+	// CarrierUndeclared is a kind no tool may change yet.
+	CarrierUndeclared Carrier = ""
+	// CarrierEntity: the object's entity carries the label, in the entity
+	// registry.
+	CarrierEntity Carrier = "entity"
+	// CarrierArea: the area carries the label itself, in the area registry.
+	CarrierArea Carrier = "area"
+	// CarrierNone: the object carries no label. A label cannot carry one.
+	CarrierNone Carrier = "none"
+)
+
+// Carrier returns what carries the label for objects of the kind. A kind
+// gets its carrier with its first tool; until then it has none declared
+// and the gate changes nothing of it.
+func (k Kind) Carrier() Carrier {
+	switch k {
+	case KindHelper, KindEntity:
+		return CarrierEntity
+	case KindArea:
+		return CarrierArea
+	case KindLabel:
+		return CarrierNone
+	default:
+		return CarrierUndeclared
+	}
+}
+
 // Core is the connection to Home Assistant Core a tool works with.
 type Core interface {
 	// Call sends one WebSocket command and decodes its result into out.
@@ -104,9 +137,11 @@ type Change struct {
 	// calls it now. Both are empty for a creation.
 	Object string
 	Name   string
-	// Entity is the entity whose label releases the object for change.
-	// Empty for a creation, which has nothing to release.
-	Entity string
+	// Holder is what carries the label that releases the object for
+	// change: an entity id or an area id, as the kind's Carrier says.
+	// Empty for a creation, which has nothing to release, and for a kind
+	// whose objects carry no label.
+	Holder string
 	// Before is the object as Home Assistant holds it; absent for a
 	// creation. After is the object as the call would leave it; absent for
 	// a deletion.
@@ -135,7 +170,8 @@ func All() []Tool {
 		statesGet(),
 	}
 	tools = append(tools, controlTools()...)
-	return append(tools, helperTools()...)
+	tools = append(tools, helperTools()...)
+	return append(tools, registryTools()...)
 }
 
 // Lookup returns the tool with the given name.

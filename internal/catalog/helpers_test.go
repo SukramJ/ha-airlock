@@ -27,28 +27,34 @@ var helperCases = map[string]string{
 	"timer":          `{"name":"Tea","duration":"0:05:00"}`,
 }
 
-// changeCases are the tools of tier R2: three for every helper domain.
-var changeCases = func() map[string]bool {
-	cases := map[string]bool{}
+// changeCases are the tools of tier R2 and the kind each changes: three
+// for every helper domain, and the registry tools.
+var changeCases = func() map[string]catalog.Kind {
+	cases := map[string]catalog.Kind{
+		"area_create": catalog.KindArea, "area_update": catalog.KindArea,
+		"label_create": catalog.KindLabel, "label_update": catalog.KindLabel,
+		"entity_update": catalog.KindEntity,
+	}
 	for domain := range helperCases {
 		for _, verb := range []string{"_create", "_update", "_delete"} {
-			cases[domain+verb] = true
+			cases[domain+verb] = catalog.KindHelper
 		}
 	}
 	return cases
 }()
 
-func TestChangeToolsAreExactlyTheDeclaredOnesAndChangeHelpers(t *testing.T) {
+func TestChangeToolsAreExactlyTheDeclaredOnesWithTheirKinds(t *testing.T) {
 	t.Parallel()
 	found := 0
 	for _, tool := range catalog.All() {
-		if changeCases[tool.Name] != (tool.Tier == catalog.R2) {
+		kind, ok := changeCases[tool.Name]
+		if ok != (tool.Tier == catalog.R2) {
 			t.Errorf("tool %s (tier %s): the R2 tools and the cases of this test differ", tool.Name, tool.Tier)
 		}
 		if tool.Tier == catalog.R2 {
 			found++
-			if tool.Kind != catalog.KindHelper {
-				t.Errorf("tool %s has kind %q", tool.Name, tool.Kind)
+			if tool.Kind != kind {
+				t.Errorf("tool %s has kind %q, want %q", tool.Name, tool.Kind, kind)
 			}
 		}
 	}
@@ -183,7 +189,7 @@ func TestCreationIsPlannedFromTheArgumentsAndWritesOnlyWhenApplied(t *testing.T)
 		t.Fatalf("plan: %v", err)
 	}
 	if len(change.Before) != 0 || string(change.After) != `{"initial":false,"name":"Movie night"}` || change.Object != "" ||
-		change.Entity != "" || change.Name != "" || change.Summary != "Create a toggle helper" || len(home.sent) != 0 {
+		change.Holder != "" || change.Name != "" || change.Summary != "Create a toggle helper" || len(home.sent) != 0 {
 		t.Fatalf("change = %+v, sent %v", change, home.sent)
 	}
 
@@ -205,7 +211,7 @@ func TestUpdateIsPlannedAgainstTheStoredItemAndReplacesIt(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	if string(change.Before) != `{"icon":"mdi:account","name":"Guest mode"}` || string(change.After) != `{"name":"Visitors"}` ||
-		change.Object != "input_boolean.guests" || change.Entity != "input_boolean.guests" || change.Name != "Guests here" ||
+		change.Object != "input_boolean.guests" || change.Holder != "input_boolean.guests" || change.Name != "Guests here" ||
 		change.Summary != "Change the toggle helper input_boolean.guests" {
 		t.Fatalf("change = %+v", change)
 	}
@@ -233,7 +239,7 @@ func TestDeletionIsPlannedWithWhatWillBeGone(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	if string(change.Before) != `{"name":"Party"}` || len(change.After) != 0 || change.Object != "input_boolean.party" ||
-		change.Entity != "input_boolean.party" || change.Name != "Party" || change.Summary != "Delete the toggle helper input_boolean.party" {
+		change.Holder != "input_boolean.party" || change.Name != "Party" || change.Summary != "Delete the toggle helper input_boolean.party" {
 		t.Fatalf("change = %+v", change)
 	}
 

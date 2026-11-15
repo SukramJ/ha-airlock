@@ -771,7 +771,7 @@ func (d helperDomain) planUpdate(ctx context.Context, core Core, entity string, 
 	}
 	return Change{
 		Summary: fmt.Sprintf("Change the %s %s", d.noun, entity),
-		Object:  entity, Name: name, Entity: entity, Before: before, After: after, Left: d.left,
+		Object:  entity, Name: name, Holder: entity, Before: before, After: after, Left: d.left,
 		Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
 			message := map[string]json.RawMessage{}
 			for key, value := range state {
@@ -816,7 +816,7 @@ func (d helperDomain) planDelete(ctx context.Context, core Core, entity string) 
 	}
 	return Change{
 		Summary: fmt.Sprintf("Delete the %s %s", d.noun, entity),
-		Object:  entity, Name: name, Entity: entity, Before: before,
+		Object:  entity, Name: name, Holder: entity, Before: before,
 		Apply: func(ctx context.Context, core Core) (string, json.RawMessage, error) {
 			if err := core.Call(ctx, d.domain+"/delete", map[string]string{d.domain + "_id": item.id}, nil); err != nil {
 				return "", nil, fmt.Errorf("%s/delete: %w", d.domain, err)
