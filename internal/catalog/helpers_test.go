@@ -27,28 +27,34 @@ var helperCases = map[string]string{
 	"timer":          `{"name":"Tea","duration":"0:05:00"}`,
 }
 
-// changeCases are the tools of tier R2: three for every helper domain.
-var changeCases = func() map[string]bool {
-	cases := map[string]bool{}
+// changeCases are the tools of tier R2 and the kind each changes: three
+// for every helper domain, and the registry tools.
+var changeCases = func() map[string]catalog.Kind {
+	cases := map[string]catalog.Kind{
+		"area_create": catalog.KindArea, "area_update": catalog.KindArea,
+		"label_create": catalog.KindLabel, "label_update": catalog.KindLabel,
+		"entity_update": catalog.KindEntity,
+	}
 	for domain := range helperCases {
 		for _, verb := range []string{"_create", "_update", "_delete"} {
-			cases[domain+verb] = true
+			cases[domain+verb] = catalog.KindHelper
 		}
 	}
 	return cases
 }()
 
-func TestChangeToolsAreExactlyTheDeclaredOnesAndChangeHelpers(t *testing.T) {
+func TestChangeToolsAreExactlyTheDeclaredOnesWithTheirKinds(t *testing.T) {
 	t.Parallel()
 	found := 0
 	for _, tool := range catalog.All() {
-		if changeCases[tool.Name] != (tool.Tier == catalog.R2) {
+		kind, ok := changeCases[tool.Name]
+		if ok != (tool.Tier == catalog.R2) {
 			t.Errorf("tool %s (tier %s): the R2 tools and the cases of this test differ", tool.Name, tool.Tier)
 		}
 		if tool.Tier == catalog.R2 {
 			found++
-			if tool.Kind != catalog.KindHelper {
-				t.Errorf("tool %s has kind %q", tool.Name, tool.Kind)
+			if tool.Kind != kind {
+				t.Errorf("tool %s has kind %q, want %q", tool.Name, tool.Kind, kind)
 			}
 		}
 	}

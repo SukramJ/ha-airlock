@@ -170,7 +170,8 @@ func All() []Tool {
 		statesGet(),
 	}
 	tools = append(tools, controlTools()...)
-	return append(tools, helperTools()...)
+	tools = append(tools, helperTools()...)
+	return append(tools, registryTools()...)
 }
 
 // Lookup returns the tool with the given name.

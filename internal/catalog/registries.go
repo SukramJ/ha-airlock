@@ -205,7 +205,8 @@ func checkColor(value json.RawMessage) error {
 
 // unassigned checks that no entity and no device names id under key: an
 // area as area_id, a label in labels. The deleted entities and devices Home
-// Assistant keeps are not in these lists (helpers/area_registry.py:329-334).
+// Assistant keeps are not in these lists (helpers/device_registry.py:4810-4816,
+// helpers/entity_registry.py:2756-2760).
 func unassigned(ctx context.Context, core Core, key, id string) error {
 	for _, list := range []struct{ command, noun string }{
 		{"config/entity_registry/list", "entity"},
@@ -413,6 +414,9 @@ func (r registry) create() Tool {
 		endpoints = append(endpoints, "websocket: config/floor_registry/list", "websocket: config/area_registry/update (labels of the new area)")
 	case CarrierNone:
 		note = " Home Assistant gives the label its id from the name."
+		// The undo of a label's creation also reads which areas carry it.
+		endpoints = append(endpoints, "websocket: config/area_registry/list (undo only)")
+	default:
 	}
 	if r.unused != nil {
 		endpoints = append(endpoints, "websocket: "+r.command+"/delete (undo only)",
@@ -499,6 +503,7 @@ func (r registry) update() Tool {
 		endpoints = append(endpoints, "websocket: config/floor_registry/list")
 	case CarrierNone:
 		release = " The label that releases objects for ha-airlock is not changed."
+	default:
 	}
 	return Tool{
 		Name:  name + "_update",
@@ -531,7 +536,8 @@ func (r registry) update() Tool {
 			return r.planUpdate(ctx, core, id, fields)
 		},
 		// A change is taken back by writing the fields as they were. They
-		// were read from Home Assistant, so they pass unchecked.
+		// were read from Home Assistant, so they pass unchecked; what they
+		// name is checked again, as it may be gone since.
 		Revert: func(ctx context.Context, core Core, object string, before, _ json.RawMessage) (Change, error) {
 			var recorded map[string]json.RawMessage
 			if err := json.Unmarshal(before, &recorded); err != nil {
@@ -541,6 +547,11 @@ func (r registry) update() Tool {
 			for _, f := range r.fields {
 				if value, ok := recorded[f.name]; ok {
 					fields[f.name] = value
+				}
+			}
+			if r.references != nil {
+				if err := r.references(ctx, core, fields); err != nil {
+					return Change{}, err
 				}
 			}
 			return r.planUpdate(ctx, core, object, fields)
@@ -703,7 +714,8 @@ func entityUpdate() Tool {
 			}
 			return planEntityUpdate(ctx, core, entity, fields)
 		},
-		// A change is taken back by writing the three fields as they were.
+		// A change is taken back by writing the three fields as they were,
+		// and only into an area that still exists.
 		Revert: func(ctx context.Context, core Core, object string, before, _ json.RawMessage) (Change, error) {
 			var recorded map[string]json.RawMessage
 			if err := json.Unmarshal(before, &recorded); err != nil {
@@ -714,6 +726,9 @@ func entityUpdate() Tool {
 				if value, ok := recorded[f.name]; ok {
 					fields[f.name] = value
 				}
+			}
+			if err := areaExists(ctx, core, fields["area_id"]); err != nil {
+				return Change{}, err
 			}
 			return planEntityUpdate(ctx, core, object, fields)
 		},
