@@ -305,27 +305,44 @@ herausragend"). Taken over here on 2026-11-12.
 
 ## Which model does which work
 
-A statement that lands in this repo is cited later as fact, so the work that
-produces such statements gets the strongest model, and the work a guard
-checks may use a cheaper one.
+Re-cut by the owner on 2026-11-15, mirrored from go-fabric #529 and
+openccu-loom #1108 (in the owner's words: "Wichtig ist, dass die Qualität
+hoch ist, aber Fable gezielt für die Dinge eingesetzt wird, die es wirklich
+besser kann"). The bar is unchanged: a statement that lands in this repo is
+cited later as fact, so it comes from the strongest model. But the strongest
+model does only the part that needs it: reading the reference and judging.
+The writing, the mechanics and the code review are Opus.
 
 | Work | Model |
 | --- | --- |
-| Analysis, planning, audits; anything written into `CONCEPT.md`, an ADR or a comment that names a consumer, a caller or a Home Assistant behaviour; *which* guard gets built and its bite line; the security paths — auth, policy, approval, redaction, audit, the tool catalogue's tier declarations, the composition root; every write to the owner's Home Assistant | **Fable** (the default for this repo) |
-| Implementation of a finished plan with guards behind it: a further read tool once the pattern exists, a CHANGELOG entry for a finished diff | **Opus** |
-| Review of a pull request, split: the code review — correctness, concurrency, error paths, tests — is **Opus**; on top **Fable** reads every new Home Assistant citation against the source and every line touching the security paths of the first row | **Opus**, then **Fable** |
-| Work a test or generator checks immediately: `gofumpt`, table cases on an existing pattern, a version bump; search and first reading of a source tree whose result a stronger model reads again | **Sonnet** |
+| **Coordination** of a slice: starting agents, integrating, guards, pull requests, status. Every write to the owner's Home Assistant is the coordinating session's own call, never an agent's ([Writes to the owner's Home Assistant need explicit approval](#writes-to-the-owners-home-assistant-need-explicit-approval)) | **Opus**, in a fresh session per slice (the state is in the notes and the memory, never in a long context) |
+| **Planning and decisions:** the slice plan; the decision briefs behind the owner's wizard, with the architecture reasoning ([the architecture standard](#the-architecture-standard)); *which* guard gets built and its bite line; the verdict where Core, the frontend, the Supervisor and ha-mcp contradict each other | **Fable**, as a targeted agent |
+| **Reading the reference and judging:** what Home Assistant Core, the frontend or the Supervisor do at the pinned source, and what this repo's own wiring does (who consumes an event, who calls a seam) — for `CONCEPT.md`, an ADR and every comment that names a consumer, a caller or a Home Assistant behaviour; the adversarial read of the `hunt` agent | **Fable** gives the verdict with the lines as a short fact note; **Opus** writes the entry or the comment in the file's form; **Fable** reads the finished text once against its note. Every reference statement comes from Fable |
+| **Implementation**, also on the security paths — auth, policy, approval, redaction, audit, the tool catalogue's tier declarations, the composition root; test ports; CHANGELOG and docs; rebases and merge conflicts | **Opus** (the `impl` default; also what fast mode runs on) — with the Fable read of the next row before it merges where it touches a security path or mirrors a reference |
+| **Review** of a slice's pull request | **Opus** does the code review — correctness, concurrency, error paths, tests. **Fable** reads on top, bounded: behaviour against Core, the frontend and the Supervisor at the pin, the security paths of the row above, and every finding of high or medium severity for confirmation before it reaches an implementer |
+| **Citations** | **Opus** checks every range (the file, the lines, the construct the sentence names). **Fable** reads every citation that is the reason for behaviour ("as Core does", "the frontend sends"), every doubtful one and a sample of the rest |
+| Work a test or generator checks immediately: `gofumpt`, table cases on an existing pattern, a version bump, regenerating `docs/tools.md`; search and first reading of a source tree whose result a stronger model reads again | **Sonnet** |
 | Mechanical inventories whose answer is a list the caller can re-grep | **Haiku** |
 
 Sonnet never writes a claim about wiring or Home Assistant behaviour into
-the repo and never touches the security paths. Haiku returns lists, never
-verdicts. When in doubt about which row a task is in, it is in the first.
+the repo. Opus does not either: it writes what Fable's fact note states.
+Haiku returns lists, never verdicts. When in doubt whether a statement is a
+reference fact, it is one.
 
 ## Sub-Agent Delegation
 
+The main conversation coordinates: integration, guards, sub-agent steering,
+final verification, and push / pull request / tag. Planning, guard
+specifications and the reading of Home Assistant's source come from Fable
+(the planning and reading rows of
+[Which model does which work](#which-model-does-which-work)) and reach the
+coordinator as a plan or a fact note.
+
 **Delegate what a gate can prove; keep what only a reader can accept.**
-Locating is delegable; reading is not. Never delegate the security paths of
-the table above, or *which* guard gets built.
+Locating is delegable; reading is not. Never delegate to an agent the
+security paths of the table above: those are implemented in the
+coordinating session, and the agents' stop conditions under
+`.claude/agents/` keep them out. *Which* guard gets built is Fable's.
 
 - No sub-agent runs `make ci` or a repo-wide lint; the full gate runs once,
   in the main conversation, at the end of the slice.
@@ -362,6 +379,30 @@ Token"), taken over from go-fabric.
 - **Skip what cannot have changed** — and say what was skipped and why.
 - **Edit by script** when several replacements hit several files; a
   generated file is regenerated, never patched.
+- **The strongest model for the part that needs it.** Set by the owner on
+  2026-11-15. Fable reads references, judges and plans (the table above);
+  it does not coordinate, format, write prose or run mechanics. A Fable
+  agent's brief is bounded: the lines to read, the question to answer, a
+  fact note back.
+- **Few turns in a long session.** A coordinator waits for several agents
+  at once and integrates them together; a status message carries new
+  information or is not sent; a slice starts in a fresh session.
+- **The assistant says when to clear the context.** Set by the owner on
+  2026-11-15. It does not wait to be asked: it proposes a fresh session
+  when a slice or a pull request is merged; when the context has been
+  summarised once and the work that remains is of another kind; or when
+  what it still needs fits in a short hand-over and the turns are mostly
+  waiting for agents or pipelines. It does NOT propose one while agents of
+  the session are running or a decision of the owner is open. The proposal
+  comes with the hand-over already written — the state, the open points
+  with where each goes, the next step, the lessons — into the memory file
+  and the notes (never only into the chat), and with the exact way to go
+  on: `/clear`, the model to switch to (`/model`), and the first message
+  to send, which names the files to read.
+- **The pipeline's guards before the pull request, not after.** The local
+  guard set is `make ci`, which runs what CI's merge path runs
+  (`.github/workflows/ci.yml`). A red pipeline costs a round of
+  coordinator turns.
 
 ## Interaction Protocol
 
