@@ -481,6 +481,40 @@ the stored item carried `step` and `mode` suggests the journal held the
 state read back after the creation, not the request; the journal itself
 was not read.
 
+Areas, labels and the entity registry, 2026-11-15, Core 2026.11.1,
+through 0.8.0-dev rebuilt after #40, with the policy file opening
+`area`, `label` and `entity` with `change: approval`. That the App ran
+#40's code is read from its tool list: 53 tools, among them
+`area_create`, `label_create` and `entity_update`; after a first
+rebuild that did not pull the repository again, the list held the 45
+tools from before and none of them. Every step below was parked,
+approved by the owner in the sidebar page and repeated; every undo was
+pressed by the owner there.
+
+- `entity_update` on `input_boolean.ha_airlock_test` with a new name
+  left the registry entry with that `name`, `original_name` "ha-airlock
+  test", and area, icon and the label `airlock` as before. After the
+  undo `name` was `null` again, the rest unchanged. The entry's `name`
+  before the change was not read beside ha-airlock; `null` is what the
+  undo restored.
+- `area_create` with the name "ha-airlock Test" created the area
+  `ha_airlock_test`, without a floor, carrying the label `airlock`.
+  `area_update` with a new name changed only the name. The first press
+  of **Undo** on that update changed nothing and left no line in the
+  App's log; the owner pressed again, and the name was "ha-airlock Test"
+  again, label, floor, icon, picture and aliases unchanged.
+- `label_create` with the name "ha-airlock Test-Label" created the label
+  `ha_airlock_test_label` without colour, icon or description.
+  `label_update` with the colour `indigo` changed only the colour; after
+  the undo it was `null` again, the rest unchanged.
+- The undo of both creations removed the area and the label: 21 areas
+  and the four labels from before were left, `airlock` with the same
+  `modified_at` as before the measurement.
+
+Read beside ha-airlock through ha-mcp with an administrator's token:
+the registry entry, the area registry and the label registry after each
+step, and the App's log after each undo.
+
 ## Unverified
 
 Not measured:
@@ -488,9 +522,16 @@ Not measured:
 - The list of changes in the sidebar page as the owner saw it, and the
   audit record `change_undone` of the undo above; neither was read back.
 - The journal file on the instance; it is in the App's private data.
-- Undo of an update and of a deletion on a running system, and an undo
-  refused because the object was altered in between. Only the undo of a
-  creation was measured.
+- Undo of a deletion on a running system, and an undo refused because
+  the object was altered in between. The undo of a creation (helpers,
+  an area, a label) and of an update (an entity, an area, a label) was
+  measured; the undo of a helper's update was not.
+- Why the first press of **Undo** on the area's update had no effect.
+  A form the page refuses (an outdated `csrf` value, a body it cannot
+  read) is answered on the page but not logged
+  (`internal/oauth/consent.go:410-426`), so the log cannot tell that
+  case from a press that never reached the App. The same was seen once
+  before, with a helper.
 - A change against an object that was altered after the approval, and a
   failed write, on a running system.
 
@@ -506,8 +547,10 @@ Not measured:
   the same entity id. For a new helper the id was the slug of its name; a
   second creation with the same name was not tried. For an area it is
   read from source (above), not observed.
-- Areas, labels and the entity registry on a running system: none of
-  their tools was measured yet. Whether the owner's Core 2026.11.1 has
+- An entity of a device, an area on a floor, and a refusal of a
+  registry tool (a kind the policy denies, an unreleased object) on a
+  running system; the measurement above used a helper's entity, an area
+  without a floor, and approvals only. Whether the owner's Core 2026.11.1 has
   the rule on entities of a device without a name of their own is not
   established; it was read at 3f8160ce7ff.
 - What a reload after a write does to automations that are running.
