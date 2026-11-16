@@ -278,7 +278,7 @@ func newApp(ctx context.Context, env environment, logger *slog.Logger) (*app, er
 	consent.Register(ingressMux)
 	// The consent page believes the user headers; only the Supervisor may
 	// reach it.
-	a.ingress = onlyFrom(peers, ingressMux)
+	a.ingress = onlyFrom(peers, logged(ingressMux, logger), logger)
 
 	opts, err := loadOptions(filepath.Join(env.dataDir, "options.json"))
 	if err != nil {
@@ -370,8 +370,8 @@ func (a *app) serve(ctx context.Context, env environment) error {
 }
 
 // onlyFrom lets a request through only if it comes from one of the given
-// addresses.
-func onlyFrom(allowed []netip.Addr, next http.Handler) http.Handler {
+// addresses. A refused peer is logged: its request never reaches the page.
+func onlyFrom(allowed []netip.Addr, next http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		addrPort, err := netip.ParseAddrPort(r.RemoteAddr)
 		if err == nil {
@@ -383,9 +383,55 @@ func onlyFrom(allowed []netip.Addr, next http.Handler) http.Handler {
 				}
 			}
 		}
+		logger.WarnContext(r.Context(), "sidebar request from a peer that is not the Supervisor",
+			slog.String("peer", r.RemoteAddr), slog.String("method", r.Method), slog.String("path", r.URL.Path))
 		http.Error(w, "This address is served to the Home Assistant Supervisor only.", http.StatusForbidden)
 	})
 }
+
+// logged writes a line for every request to the sidebar page that is not a
+// read, and for every path or method the page does not serve. A press of a
+// button then leaves a line with its answer; no line at all means the
+// request did not reach the App. The line names the method, the path, the
+// status and the user, never the query or the form.
+func logged(next http.Handler, logger *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		level := slog.LevelInfo
+		switch {
+		case rec.status == http.StatusNotFound || rec.status == http.StatusMethodNotAllowed:
+			level = slog.LevelWarn
+		case r.Method == http.MethodGet || r.Method == http.MethodHead:
+			return
+		}
+		logger.LogAttrs(r.Context(), level, "sidebar request",
+			slog.String("method", r.Method), slog.String("path", r.URL.Path),
+			slog.Int("status", rec.status), slog.String("user", r.Header.Get("X-Remote-User-Id")))
+	})
+}
+
+// statusRecorder remembers the status a handler answered with.
+type statusRecorder struct {
+	http.ResponseWriter
+	status  int
+	written bool
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if !s.written {
+		s.status, s.written = code, true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	s.written = true
+	return s.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the connection's writer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // onlyHost lets a request through only if it names the configured public
 // host. A browser that was led to this port under another name — DNS

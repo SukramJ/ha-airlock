@@ -4,6 +4,7 @@
 package oauth_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,6 +48,25 @@ type web struct {
 	actions *approval.Store
 	states  *fakeStates
 	made    *fakeChanges
+	log     *logBuffer
+}
+
+// logBuffer is a log sink the servers and the test may use at once.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // fakeChanges is a journal with what it was given, and remembers what it
@@ -94,8 +115,8 @@ func (f *fakeSwitch) Set(_ context.Context, engage bool, by string) error {
 
 func newWeb(t *testing.T) *web {
 	t.Helper()
-	w := &web{fixture: newFixture(t)}
-	logger := slog.New(slog.DiscardHandler)
+	w := &web{fixture: newFixture(t), log: &logBuffer{}}
+	logger := slog.New(slog.NewTextHandler(w.log, nil))
 
 	publicMux := http.NewServeMux()
 	w.public = httptest.NewServer(publicMux)
@@ -469,6 +490,60 @@ func TestConsentFormsNeedThePagesOwnToken(t *testing.T) {
 	}
 	if len(w.store.PendingRequests()) != 1 {
 		t.Fatal("a forged form decided the request")
+	}
+}
+
+func TestRefusedFormIsLoggedWithItsReason(t *testing.T) {
+	t.Parallel()
+	const changeID, forged = "change-to-undo-7f3a", "forged-token-91c2"
+	for _, tc := range []struct {
+		reason, user, groups string
+		form                 url.Values
+		status               int
+	}{
+		{"not administrator", "plain-user", "system-users", url.Values{"csrf": {forged}, "id": {changeID}}, http.StatusForbidden},
+		{"unreadable form", admin, "system-admin", url.Values{"csrf": {forged}, "id": {changeID}, "pad": {strings.Repeat("x", 5<<10)}}, http.StatusBadRequest},
+		{"stale csrf", admin, "system-admin", url.Values{"csrf": {forged}, "id": {changeID}}, http.StatusForbidden},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			t.Parallel()
+			w := newWeb(t)
+
+			resp, _ := w.consentRequest(t, http.MethodPost, "/undo", tc.form, tc.user, tc.groups)
+
+			if resp.status != tc.status {
+				t.Fatalf("status %d, want %d", resp.status, tc.status)
+			}
+			if len(w.made.undone) != 0 {
+				t.Fatalf("a refused form undid a change: %v", w.made.undone)
+			}
+			got := w.log.String()
+			want := []string{"level=WARN", `msg="form refused"`, `reason="` + tc.reason + `"`, "path=/undo", "user=" + tc.user}
+			for _, part := range want {
+				if !strings.Contains(got, part) {
+					t.Fatalf("no log line for %s: %q missing from\n%s", tc.reason, part, got)
+				}
+			}
+			for _, secret := range []string{forged, changeID} {
+				if strings.Contains(got, secret) {
+					t.Fatalf("the log carries a form value %q:\n%s", secret, got)
+				}
+			}
+		})
+	}
+}
+
+func TestAcceptedFormIsNotLoggedAsRefused(t *testing.T) {
+	t.Parallel()
+	w := newWeb(t)
+
+	resp, _ := w.asAdmin(t, http.MethodPost, "/undo", url.Values{"csrf": {w.csrf(t)}, "id": {"some-change"}})
+
+	if resp.status != http.StatusOK || len(w.made.undone) != 1 {
+		t.Fatalf("status %d, undone %v", resp.status, w.made.undone)
+	}
+	if got := w.log.String(); strings.Contains(got, "form refused") {
+		t.Fatalf("an accepted form was logged as refused:\n%s", got)
 	}
 }
 

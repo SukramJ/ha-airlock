@@ -406,23 +406,37 @@ func (c *Consent) auditPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // checked reports whether a POST comes from an administrator and from the
-// consent page itself.
+// consent page itself. A refused form is logged with its reason: the
+// answer is a plain error the administrator may not read, and without the
+// line a press that did nothing leaves no trace. The line names the path
+// and the user, never a form value.
 func (c *Consent) checked(w http.ResponseWriter, r *http.Request) (userID string, ok bool) {
 	userID, ok = administrator(r)
 	if !ok {
+		c.refused(r, "not administrator", r.Header.Get(headerUserID))
 		http.Error(w, "Only a Home Assistant administrator can manage ha-airlock.", http.StatusForbidden)
 		return "", false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	if err := r.ParseForm(); err != nil {
+		c.refused(r, "unreadable form", userID)
 		http.Error(w, "The form could not be read.", http.StatusBadRequest)
 		return "", false
 	}
 	if subtle.ConstantTimeCompare([]byte(r.PostForm.Get("csrf")), []byte(c.csrf)) != 1 {
+		// The token is made once per process: a page drawn before a
+		// restart sends one that no longer matches.
+		c.refused(r, "stale csrf", userID)
 		http.Error(w, "The form is out of date. Open ha-airlock again.", http.StatusForbidden)
 		return "", false
 	}
 	return userID, true
+}
+
+// refused logs a form the page turned away.
+func (c *Consent) refused(r *http.Request, reason, userID string) {
+	c.logger.WarnContext(r.Context(), "form refused",
+		slog.String("reason", reason), slog.String("path", r.URL.Path), slog.String("user", userID))
 }
 
 func (c *Consent) decide(w http.ResponseWriter, r *http.Request) {
