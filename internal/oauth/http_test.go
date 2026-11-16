@@ -503,7 +503,7 @@ func TestRefusedFormIsLoggedWithItsReason(t *testing.T) {
 	}{
 		{"not administrator", "plain-user", "system-users", url.Values{"csrf": {forged}, "id": {changeID}}, http.StatusForbidden},
 		{"unreadable form", admin, "system-admin", url.Values{"csrf": {forged}, "id": {changeID}, "pad": {strings.Repeat("x", 5<<10)}}, http.StatusBadRequest},
-		{"stale csrf", admin, "system-admin", url.Values{"csrf": {forged}, "id": {changeID}}, http.StatusForbidden},
+		{"csrf mismatch", admin, "system-admin", url.Values{"csrf": {forged}, "id": {changeID}}, http.StatusForbidden},
 	} {
 		t.Run(tc.reason, func(t *testing.T) {
 			t.Parallel()

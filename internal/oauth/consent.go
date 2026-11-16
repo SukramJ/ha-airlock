@@ -425,8 +425,9 @@ func (c *Consent) checked(w http.ResponseWriter, r *http.Request) (userID string
 	}
 	if subtle.ConstantTimeCompare([]byte(r.PostForm.Get("csrf")), []byte(c.csrf)) != 1 {
 		// The token is made once per process: a page drawn before a
-		// restart sends one that no longer matches.
-		c.refused(r, "stale csrf", userID)
+		// restart sends one that no longer matches. A missing or forged
+		// token is refused the same way.
+		c.refused(r, "csrf mismatch", userID)
 		http.Error(w, "The form is out of date. Open ha-airlock again.", http.StatusForbidden)
 		return "", false
 	}

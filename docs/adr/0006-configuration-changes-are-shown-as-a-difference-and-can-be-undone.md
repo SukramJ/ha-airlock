@@ -529,12 +529,13 @@ Not measured:
 - Why the first press of **Undo** on the area's update had no effect.
   The cause is still not established. Since 0.9.1-dev the log tells
   the cases apart: a form the page refuses logs `form refused` with its
-  reason (`not administrator`, `unreadable form`, `stale csrf`; the
+  reason (`not administrator`, `unreadable form`, `csrf mismatch`; the
   token is made once per process, so a page drawn before a restart
-  sends a stale one), every request to the page that is not a read logs
-  `sidebar request` with its status, and a peer other than the
+  sends a stale one, and a missing or forged token reads the same),
+  every request to the page that is not a read logs `sidebar request`
+  with its status once its handler returns, and a peer other than the
   Supervisor is logged. A press that leaves no line at all did not reach
-  the App. The same was seen once before, with a helper.
+  the App, or its handler did not return. The same was seen once before, with a helper.
 - A change against an object that was altered after the approval, and a
   failed write, on a running system.
 

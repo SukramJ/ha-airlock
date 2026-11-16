@@ -478,12 +478,27 @@ func TestSidebarRequestsThatAreNotReadsAreLoggedWithTheirAnswer(t *testing.T) {
 			t.Fatalf("%s %s left no line %q:\n%s", tc.method, tc.path, tc.line, log)
 		}
 	}
-	// A read of the page is not logged.
+	// A press the page accepts answers with an implicit 200.
+	token := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(r.asAdmin(t, http.MethodGet, "/", nil).body)
+	if token == nil {
+		t.Fatal("no csrf token on the page")
+	}
+	r.asAdmin(t, http.MethodPost, "/halt", url.Values{"csrf": {token[1]}, "action": {"release"}})
+	if log := r.log.String(); !strings.Contains(log, `level=INFO msg="sidebar request" method=POST path=/halt status=200`) {
+		t.Fatalf("an accepted press left no line with status 200:\n%s", log)
+	}
+	// A read of the page is not logged; a read of a path it does not serve is.
 	if got := r.asAdmin(t, http.MethodGet, "/", nil); got.status != http.StatusOK {
 		t.Fatalf("GET /: status %d", got.status)
 	}
-	if log := r.log.String(); strings.Contains(log, "method=GET") {
+	if log := r.log.String(); strings.Contains(log, "method=GET path=/ ") {
 		t.Fatalf("a read of the page was logged:\n%s", log)
+	}
+	if got := r.asAdmin(t, http.MethodGet, "/nowhere", nil); got.status != http.StatusNotFound {
+		t.Fatalf("GET /nowhere: status %d", got.status)
+	}
+	if log := r.log.String(); !strings.Contains(log, `level=WARN msg="sidebar request" method=GET path=/nowhere status=404`) {
+		t.Fatalf("a read of a path the page does not serve was not logged:\n%s", log)
 	}
 }
 
