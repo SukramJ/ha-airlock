@@ -527,11 +527,15 @@ Not measured:
   an area, a label) and of an update (an entity, an area, a label) was
   measured; the undo of a helper's update was not.
 - Why the first press of **Undo** on the area's update had no effect.
-  A form the page refuses (an outdated `csrf` value, a body it cannot
-  read) is answered on the page but not logged
-  (`internal/oauth/consent.go:410-426`), so the log cannot tell that
-  case from a press that never reached the App. The same was seen once
-  before, with a helper.
+  The cause is still not established. Since 0.9.1-dev the log tells
+  the cases apart: a form the page refuses logs `form refused` with its
+  reason (`not administrator`, `unreadable form`, `csrf mismatch`; the
+  token is made once per process, so a page drawn before a restart
+  sends a stale one, and a missing or forged token reads the same),
+  every request to the page that is not a read logs `sidebar request`
+  with its status once its handler returns, and a peer other than the
+  Supervisor is logged. A press that leaves no line at all did not reach
+  the App, or its handler did not return. The same was seen once before, with a helper.
 - A change against an object that was altered after the approval, and a
   failed write, on a running system.
 

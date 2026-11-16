@@ -146,6 +146,11 @@ All notable changes to ha-airlock are recorded here. The format follows
 
 ### Fixed
 
+- A form the sidebar page refuses — not from an administrator,
+  unreadable, or from a page drawn before the last restart — is logged
+  with its reason, and so is every request to the page that is not a
+  read, with the answer it got, and every request from a peer that is
+  not the Supervisor. Two presses of Undo had left no trace in the log.
 - A new object whose control label Home Assistant did not keep is
   reported in the audit record: Home Assistant drops a label id it does
   not know and still answers success, and the gate now reads the answer.

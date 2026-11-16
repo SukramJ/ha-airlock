@@ -449,6 +449,57 @@ func TestConsentPageIsServedToTheSupervisorOnly(t *testing.T) {
 	if got.status != http.StatusForbidden {
 		t.Fatalf("consent page for another peer: status %d, want 403", got.status)
 	}
+	if log := r.log.String(); !strings.Contains(log, `level=WARN msg="sidebar request from a peer that is not the Supervisor"`) ||
+		!strings.Contains(log, "peer=127.0.0.1:") {
+		t.Fatalf("the refused peer left no log line:\n%s", log)
+	}
+}
+
+func TestSidebarRequestsThatAreNotReadsAreLoggedWithTheirAnswer(t *testing.T) {
+	t.Parallel()
+	r := startServer(t, `{"public_url":"`+publicURL+`"}`)
+
+	for _, tc := range []struct {
+		method, path string
+		status       int
+		line         string
+	}{
+		{http.MethodPost, "/undo", http.StatusForbidden, `level=INFO msg="sidebar request" method=POST path=/undo status=403 user=admin-user-id`},
+		{http.MethodPost, "/nowhere", http.StatusNotFound, `level=WARN msg="sidebar request" method=POST path=/nowhere status=404`},
+		{http.MethodPost, "/", http.StatusMethodNotAllowed, `level=WARN msg="sidebar request" method=POST path=/ status=405`},
+	} {
+		// A form without the page's token: the server answers, and the
+		// line records what it answered.
+		got := r.asAdmin(t, tc.method, tc.path, url.Values{"csrf": {"not-the-token"}, "id": {"c1"}})
+		if got.status != tc.status {
+			t.Fatalf("%s %s: status %d, want %d", tc.method, tc.path, got.status, tc.status)
+		}
+		if log := r.log.String(); !strings.Contains(log, tc.line) {
+			t.Fatalf("%s %s left no line %q:\n%s", tc.method, tc.path, tc.line, log)
+		}
+	}
+	// A press the page accepts answers with an implicit 200.
+	token := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(r.asAdmin(t, http.MethodGet, "/", nil).body)
+	if token == nil {
+		t.Fatal("no csrf token on the page")
+	}
+	r.asAdmin(t, http.MethodPost, "/halt", url.Values{"csrf": {token[1]}, "action": {"release"}})
+	if log := r.log.String(); !strings.Contains(log, `level=INFO msg="sidebar request" method=POST path=/halt status=200`) {
+		t.Fatalf("an accepted press left no line with status 200:\n%s", log)
+	}
+	// A read of the page is not logged; a read of a path it does not serve is.
+	if got := r.asAdmin(t, http.MethodGet, "/", nil); got.status != http.StatusOK {
+		t.Fatalf("GET /: status %d", got.status)
+	}
+	if log := r.log.String(); strings.Contains(log, "method=GET path=/ ") {
+		t.Fatalf("a read of the page was logged:\n%s", log)
+	}
+	if got := r.asAdmin(t, http.MethodGet, "/nowhere", nil); got.status != http.StatusNotFound {
+		t.Fatalf("GET /nowhere: status %d", got.status)
+	}
+	if log := r.log.String(); !strings.Contains(log, `level=WARN msg="sidebar request" method=GET path=/nowhere status=404`) {
+		t.Fatalf("a read of a path the page does not serve was not logged:\n%s", log)
+	}
 }
 
 func TestPublicListenerStaysClosedWithoutAUsablePublicURL(t *testing.T) {
